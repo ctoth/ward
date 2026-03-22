@@ -1,0 +1,11 @@
+{
+  "session_id": "gemini-session-456",
+  "transcript_path": "/tmp/transcript.jsonl",
+  "cwd": "/tmp",
+  "hook_event_name": "BeforeTool",
+  "timestamp": "2026-03-22T10:00:00Z",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "git stash"
+  }
+}

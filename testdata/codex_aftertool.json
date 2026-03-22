@@ -1,0 +1,27 @@
+{
+  "session_id": "codex-session-789",
+  "cwd": "/tmp",
+  "triggered_at": "2026-03-22T10:00:00Z",
+  "hook_event": {
+    "event_type": "after_tool_use",
+    "turn_id": "turn-1",
+    "call_id": "call-1",
+    "tool_name": "local_shell",
+    "tool_kind": "local_shell",
+    "tool_input": {
+      "input_type": "local_shell",
+      "params": {
+        "command": ["python", "-c", "print('hello')"],
+        "workdir": "/tmp",
+        "timeout_ms": 60000
+      }
+    },
+    "executed": true,
+    "success": true,
+    "duration_ms": 42,
+    "mutating": false,
+    "sandbox": "none",
+    "sandbox_policy": "danger-full-access",
+    "output_preview": "hello"
+  }
+}

@@ -1,0 +1,37 @@
+default_phase: planning
+
+facts:
+  git_branch:
+    command: "echo main"
+  has_pyproject:
+    command: "echo true"
+    type: bool
+
+rules:
+  - when: 'tool == "Bash" && input.command.matches("python[3]?\\s+-c")'
+    action: deny
+    message: "Write a .py file, then run it."
+
+  - when: 'tool == "Bash" && input.command.matches("^python[3]?\\s") && facts.has_pyproject'
+    action: deny
+    message: "Use uv run python instead of bare python."
+
+  - when: 'tool == "Bash" && input.command.matches("git\\s+stash")'
+    action: deny
+    message: "Commit or branch first."
+
+  - when: 'tool == "Bash" && input.command.matches("git\\s+add\\s+(\\.|--all|-A)")'
+    action: deny
+    message: "Add specific files by name."
+
+  - when: 'session.phase == "planning" && tool in ["Edit", "Write"]'
+    action: deny
+    message: "Planning phase. Present your plan first."
+
+  - when: 'session.reads_since_bash >= 3'
+    action: context
+    message: "3+ files read without running anything."
+
+  - when: 'session.edits_since_commit >= 2'
+    action: context
+    message: "2+ files edited without committing."
