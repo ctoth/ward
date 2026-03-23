@@ -338,12 +338,7 @@ func TestEvaluateFlailingContext(t *testing.T) {
 func TestEvaluateSafeCommandAllow(t *testing.T) {
 	guard := loadTestGuard(t)
 	state := NewState("implementing")
-	event := ToolEvent{
-		Tool:      "Bash",
-		Input:     map[string]any{"command": "ls -la"},
-		SessionID: "test",
-		CWD:       t.TempDir(),
-	}
+	event := bashEvent(t, "ls -la")
 
 	result, err := Evaluate(guard, state, event)
 	if err != nil {
@@ -358,7 +353,7 @@ func TestEvaluateDenyVetoesContext(t *testing.T) {
 	// Create a guard with both a deny and context rule that match
 	rules := []Rule{
 		{When: `size(last(session.history, 5)) == 5 && last(session.history, 5).all(t, t in ["Read", "Glob", "Grep"])`, Action: "context", Message: "flailing"},
-		{When: `tool == "Bash" && input.command.matches("python[3]?\\s+-c")`, Action: "deny", Message: "no python -c"},
+		{When: `tool == "Bash" && input.commands.exists(c, c.full.matches("^python[3]?\\s+-c"))`, Action: "deny", Message: "no python -c"},
 	}
 	guard, err := NewGuard(nil, rules)
 	if err != nil {
@@ -369,12 +364,7 @@ func TestEvaluateDenyVetoesContext(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		state.History = append(state.History, "Read")
 	}
-	event := ToolEvent{
-		Tool:      "Bash",
-		Input:     map[string]any{"command": "python -c 'x'"},
-		SessionID: "test",
-		CWD:       t.TempDir(),
-	}
+	event := bashEvent(t, "python -c 'x'")
 
 	result, err := Evaluate(guard, state, event)
 	if err != nil {
