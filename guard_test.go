@@ -208,6 +208,24 @@ func TestStateCommitMarker(t *testing.T) {
 	}
 }
 
+func TestStateCommitMarkerIgnoresRawMention(t *testing.T) {
+	s := NewState("implementing")
+
+	s.Update("Edit", nil)
+	s.Update("Bash", map[string]any{"command": "echo git commit"})
+	s.Update("Edit", nil)
+
+	expected := []string{"Edit", "Bash", "Edit"}
+	if len(s.History) != len(expected) {
+		t.Fatalf("expected %d history entries, got %d: %v", len(expected), len(s.History), s.History)
+	}
+	for i, want := range expected {
+		if s.History[i] != want {
+			t.Errorf("history[%d] = %q, want %q", i, s.History[i], want)
+		}
+	}
+}
+
 func TestStateHistoryCap(t *testing.T) {
 	s := NewState("implementing")
 	for i := 0; i < 110; i++ {
@@ -346,6 +364,40 @@ func TestEvaluateSafeCommandAllow(t *testing.T) {
 	}
 	if result != nil {
 		t.Errorf("expected nil (allow) for safe command, got %v", result)
+	}
+}
+
+func TestEvaluateCodexLocalShellMatchesBashRules(t *testing.T) {
+	guard := loadTestGuard(t)
+	state := NewState("implementing")
+	raw := []byte(`{
+		"session_id":"codex-session-789",
+		"cwd":"C:/tmp",
+		"hook_event":{
+			"event_type":"after_tool_use",
+			"tool_name":"local_shell",
+			"tool_input":{
+				"params":{
+					"command":["python","-c","print(1)"]
+				}
+			}
+		}
+	}`)
+
+	event, _, err := DetectAndParse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := Evaluate(guard, state, event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result == nil {
+		t.Fatal("expected deny result, got nil")
+	}
+	if result.Action != "deny" {
+		t.Errorf("expected deny, got %q", result.Action)
 	}
 }
 

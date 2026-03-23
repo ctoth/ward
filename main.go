@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -153,8 +152,14 @@ func cmdEval() {
 		return // allow — no output
 	}
 
-	response := FormatResponse(agent, result)
-	out, _ := json.Marshal(response)
+	out, err := EncodeResponse(agent, event.EventType, result)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ward: encode response: %v\n", err)
+		os.Exit(1)
+	}
+	if out == nil {
+		return
+	}
 	fmt.Println(string(out))
 }
 

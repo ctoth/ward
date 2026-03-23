@@ -286,15 +286,13 @@ func NewState(phase string) *State {
 }
 
 func (s *State) Update(tool string, input map[string]any) {
-	// Detect git commit in Bash commands and append synthetic marker
-	if tool == "Bash" {
-		if cmd, ok := input["command"].(string); ok {
-			if strings.Contains(cmd, "git commit") {
-				s.appendHistory("_commit")
-			}
-		}
+	toolName := canonicalToolName(tool)
+
+	// Detect git commit from parsed commands rather than raw substrings.
+	if toolName == "Bash" && hasGitCommit(input) {
+		s.appendHistory("_commit")
 	}
-	s.appendHistory(tool)
+	s.appendHistory(toolName)
 }
 
 func (s *State) appendHistory(entry string) {
@@ -424,7 +422,7 @@ func Evaluate(guard *Guard, state *State, event ToolEvent) (*Result, error) {
 	}
 
 	activation := map[string]any{
-		"tool":    event.Tool,
+		"tool":    canonicalToolName(event.Tool),
 		"input":   normalizedInput,
 		"session": sessionMap,
 		"facts":   factsMap,
@@ -507,4 +505,53 @@ func computeFact(fact Fact, cwd string) (any, error) {
 	default:
 		return val, nil
 	}
+}
+
+func canonicalToolName(tool string) string {
+	switch tool {
+	case "local_shell":
+		return "Bash"
+	default:
+		return tool
+	}
+}
+
+func hasGitCommit(input map[string]any) bool {
+	for _, cmd := range commandsFromInput(input) {
+		if cmd.Name == "git" && strings.HasPrefix(cmd.Full, "git commit") {
+			return true
+		}
+	}
+	return false
+}
+
+func commandsFromInput(input map[string]any) []ParsedCommand {
+	if input == nil {
+		return nil
+	}
+	if commands, ok := input["commands"].([]any); ok {
+		parsed := make([]ParsedCommand, 0, len(commands))
+		for _, raw := range commands {
+			cmd, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			name, _ := cmd["name"].(string)
+			full, _ := cmd["full"].(string)
+			if name == "" && full == "" {
+				continue
+			}
+			parsed = append(parsed, ParsedCommand{Name: name, Full: full})
+		}
+		if len(parsed) > 0 {
+			return parsed
+		}
+	}
+	if parts, ok := stringSlice(input["command_argv"]); ok && len(parts) > 0 {
+		return parseArgvCommand(parts)
+	}
+	if cmd, ok := input["command"].(string); ok && cmd != "" {
+		return ParseCommands(cmd)
+	}
+	return nil
 }

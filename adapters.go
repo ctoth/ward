@@ -85,19 +85,16 @@ func enrichBashCommands(event *ToolEvent) {
 	if event.Tool != "Bash" && event.Tool != "local_shell" {
 		return
 	}
+	if parts, ok := stringSlice(event.Input["command_argv"]); ok && len(parts) > 0 {
+		event.Input["commands"] = parsedCommandMaps(parseArgvCommand(parts))
+		return
+	}
+
 	cmd, ok := event.Input["command"].(string)
 	if !ok || cmd == "" {
 		return
 	}
-	parsed := ParseCommands(cmd)
-	commands := make([]any, len(parsed))
-	for i, p := range parsed {
-		commands[i] = map[string]any{
-			"name": p.Name,
-			"full": p.Full,
-		}
-	}
-	event.Input["commands"] = commands
+	event.Input["commands"] = parsedCommandMaps(ParseCommands(cmd))
 }
 
 func parseClaude(raw map[string]any, eventName string) (ToolEvent, AgentType, error) {
@@ -169,6 +166,7 @@ func parseCodex(raw map[string]any, hookEvent map[string]any) (ToolEvent, AgentT
 					}
 				}
 				event.Input["command"] = joinStrings(parts)
+				event.Input["command_argv"] = parts
 			}
 			for k, v := range params {
 				if k != "command" {
@@ -189,17 +187,28 @@ func parseCodex(raw map[string]any, hookEvent map[string]any) (ToolEvent, AgentT
 }
 
 // FormatResponse converts a Result into agent-specific hook response JSON.
-func FormatResponse(agent AgentType, result *Result) map[string]any {
+func FormatResponse(agent AgentType, eventType string, result *Result) map[string]any {
 	switch agent {
 	case AgentClaude:
 		return formatClaude(result)
 	case AgentGemini:
-		return formatGemini(result)
+		return formatGemini(eventType, result)
 	case AgentCodex:
 		return nil // Codex has no response mechanism
 	default:
 		return nil
 	}
+}
+
+func EncodeResponse(agent AgentType, eventType string, result *Result) ([]byte, error) {
+	if result == nil {
+		return nil, nil
+	}
+	response := FormatResponse(agent, eventType, result)
+	if response == nil {
+		return nil, nil
+	}
+	return json.Marshal(response)
 }
 
 func formatClaude(r *Result) map[string]any {
@@ -231,7 +240,7 @@ func formatClaude(r *Result) map[string]any {
 	}
 }
 
-func formatGemini(r *Result) map[string]any {
+func formatGemini(eventType string, r *Result) map[string]any {
 	switch r.Action {
 	case "deny":
 		return map[string]any{
@@ -239,6 +248,14 @@ func formatGemini(r *Result) map[string]any {
 			"reason":   r.Message,
 		}
 	case "context":
+		if eventType == "post_tool" {
+			return map[string]any{
+				"hookSpecificOutput": map[string]any{
+					"hookEventName":     "AfterTool",
+					"additionalContext": r.Message,
+				},
+			}
+		}
 		return map[string]any{
 			"systemMessage": r.Message,
 		}
@@ -269,4 +286,48 @@ func joinStrings(parts []string) string {
 		result += p
 	}
 	return result
+}
+
+func stringSlice(v any) ([]string, bool) {
+	switch parts := v.(type) {
+	case []string:
+		return parts, true
+	case []any:
+		out := make([]string, 0, len(parts))
+		for _, part := range parts {
+			s, ok := part.(string)
+			if !ok {
+				return nil, false
+			}
+			out = append(out, s)
+		}
+		return out, true
+	default:
+		return nil, false
+	}
+}
+
+func parseArgvCommand(parts []string) []ParsedCommand {
+	if len(parts) == 0 {
+		return nil
+	}
+	cmd := ParsedCommand{
+		Name: parts[0],
+		Full: joinStrings(parts),
+	}
+	if len(parts) > 1 {
+		cmd.Args = append([]string(nil), parts[1:]...)
+	}
+	return []ParsedCommand{cmd}
+}
+
+func parsedCommandMaps(parsed []ParsedCommand) []any {
+	commands := make([]any, len(parsed))
+	for i, p := range parsed {
+		commands[i] = map[string]any{
+			"name": p.Name,
+			"full": p.Full,
+		}
+	}
+	return commands
 }
