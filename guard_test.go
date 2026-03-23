@@ -530,6 +530,83 @@ func TestCompileRule(t *testing.T) {
 	}
 }
 
+// --- Shell parsing integration tests ---
+
+func TestHeredocFalsePositive(t *testing.T) {
+	// git commit with "python -c" in heredoc message should NOT trigger no-python-c
+	guard := loadTestGuard(t)
+	state := NewState("implementing")
+	event := bashEvent(t, "git commit -m \"$(cat <<'EOF'\npython -c blah\nEOF\n)\"")
+
+	result, err := Evaluate(guard, state, event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != nil && result.Action == "deny" {
+		t.Errorf("heredoc content should not trigger deny, got: %s", result.Message)
+	}
+}
+
+func TestPipeChainTriggers(t *testing.T) {
+	// python -c in a pipe should still trigger
+	guard := loadTestGuard(t)
+	state := NewState("implementing")
+	event := bashEvent(t, "echo foo | python -c \"import sys\"")
+
+	result, err := Evaluate(guard, state, event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result == nil || result.Action != "deny" {
+		t.Errorf("python -c in pipe should trigger deny, got: %v", result)
+	}
+}
+
+func TestAndChainTriggers(t *testing.T) {
+	// python -c in && chain should still trigger
+	guard := loadTestGuard(t)
+	state := NewState("implementing")
+	event := bashEvent(t, "cd /tmp && python -c \"print(1)\"")
+
+	result, err := Evaluate(guard, state, event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result == nil || result.Action != "deny" {
+		t.Errorf("python -c in && chain should trigger deny, got: %v", result)
+	}
+}
+
+func TestSafeArgsNoFalsePositive(t *testing.T) {
+	// echo "git stash is bad" should NOT trigger no-git-stash
+	guard := loadTestGuard(t)
+	state := NewState("implementing")
+	event := bashEvent(t, `echo "git stash is bad"`)
+
+	result, err := Evaluate(guard, state, event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != nil && result.Action == "deny" {
+		t.Errorf("echo with 'git stash' in args should not trigger deny, got: %s", result.Message)
+	}
+}
+
+func TestGitCommitMessageNoFalsePositive(t *testing.T) {
+	// git commit -m "python -c is forbidden" should NOT trigger no-python-c
+	guard := loadTestGuard(t)
+	state := NewState("implementing")
+	event := bashEvent(t, `git commit -m "python -c is forbidden"`)
+
+	result, err := Evaluate(guard, state, event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != nil && result.Action == "deny" {
+		t.Errorf("commit message with 'python -c' should not trigger deny, got: %s", result.Message)
+	}
+}
+
 // helper
 func writeFile(path, content string) error {
 	return os.WriteFile(path, []byte(content), 0o644)
