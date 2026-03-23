@@ -2,6 +2,8 @@
 
 Session-aware guard for AI coding agents. Ward evaluates CEL rules against tool calls from Claude Code, Gemini CLI, and Codex CLI, enforcing project-specific policies like "no `python -c`" or "commit before editing more files." Rules are per-file YAML, deny is a veto, and context messages accumulate.
 
+Ward parses shell commands into an AST using [mvdan.cc/sh](https://pkg.go.dev/mvdan.cc/sh/v3), so rules match against actual commands — not raw text. This means `git commit -m "python -c blah"` won't trigger a no-python-c rule, because the only actual command is `git`. Pipes, `&&` chains, and semicolons are all decomposed into individual commands.
+
 ## Install
 
 ```
