@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -393,7 +394,17 @@ var factsRefRe = regexp.MustCompile(`facts\.(\w+)`)
 // - No denies, some context → all context messages joined
 // - Nothing matches → allowed (nil)
 func Evaluate(guard *Guard, state *State, event ToolEvent) (*Result, error) {
+	return EvaluateVerbose(guard, state, event, nil)
+}
+
+// EvaluateVerbose is like Evaluate but writes debug info to verbose when non-nil.
+func EvaluateVerbose(guard *Guard, state *State, event ToolEvent, verbose io.Writer) (*Result, error) {
 	sessionMap := state.ToMap()
+
+	if verbose != nil {
+		fmt.Fprintf(verbose, "ward: eval tool=%s  phase=%s  history_len=%d\n",
+			canonicalToolName(event.Tool), state.Phase, len(state.History))
+	}
 
 	// Normalize input paths
 	normalizedInput := NormalizeInput(event.Input)
@@ -416,9 +427,15 @@ func Evaluate(guard *Guard, state *State, event ToolEvent) (*Result, error) {
 		val, err := computeFact(fact, event.CWD)
 		if err != nil {
 			factsMap[name] = ""
+			if verbose != nil {
+				fmt.Fprintf(verbose, "ward:   fact %s: error: %v\n", name, err)
+			}
 			continue
 		}
 		factsMap[name] = val
+		if verbose != nil {
+			fmt.Fprintf(verbose, "ward:   fact %s = %v\n", name, val)
+		}
 	}
 
 	activation := map[string]any{
@@ -431,6 +448,11 @@ func Evaluate(guard *Guard, state *State, event ToolEvent) (*Result, error) {
 	// Collect all matching results: deny-is-veto, context accumulates
 	var contextMessages []string
 	for _, rule := range guard.Rules {
+		ruleLabel := rule.filename
+		if ruleLabel == "" {
+			ruleLabel = "(inline)"
+		}
+
 		// Check scope if present
 		if rule.Scope != "" {
 			filePath := ""
@@ -438,6 +460,9 @@ func Evaluate(guard *Guard, state *State, event ToolEvent) (*Result, error) {
 				filePath = fp
 			}
 			if filePath == "" {
+				if verbose != nil {
+					fmt.Fprintf(verbose, "ward:   rule %s: scope=%q skip (no file_path)\n", ruleLabel, rule.Scope)
+				}
 				continue // scope requires a file path
 			}
 			matched, _ := filepath.Match(NormalizePath(rule.Scope), filePath)
@@ -450,25 +475,47 @@ func Evaluate(guard *Guard, state *State, event ToolEvent) (*Result, error) {
 					if strings.HasSuffix(scope, "/**") {
 						prefix := strings.TrimSuffix(scope, "/**")
 						if !strings.HasPrefix(filePath, prefix+"/") && !strings.HasPrefix(filePath, prefix) {
+							if verbose != nil {
+								fmt.Fprintf(verbose, "ward:   rule %s: scope=%q skip (path %q not matched)\n", ruleLabel, rule.Scope, filePath)
+							}
 							continue
 						}
 					} else {
+						if verbose != nil {
+							fmt.Fprintf(verbose, "ward:   rule %s: scope=%q skip (path %q not matched)\n", ruleLabel, rule.Scope, filePath)
+						}
 						continue
 					}
 				}
+			}
+			if verbose != nil {
+				fmt.Fprintf(verbose, "ward:   rule %s: scope=%q matched path %q\n", ruleLabel, rule.Scope, filePath)
 			}
 		}
 
 		out, _, err := rule.program.Eval(activation)
 		if err != nil {
+			if verbose != nil {
+				fmt.Fprintf(verbose, "ward:   rule %s: eval ERROR: %v\n", ruleLabel, err)
+			}
 			continue // rule doesn't apply (e.g., missing field)
 		}
 		if out.Type() != types.BoolType || !out.Value().(bool) {
+			if verbose != nil {
+				fmt.Fprintf(verbose, "ward:   rule %s: eval=false\n", ruleLabel)
+			}
 			continue
+		}
+
+		if verbose != nil {
+			fmt.Fprintf(verbose, "ward:   rule %s: eval=true → %s\n", ruleLabel, rule.Action)
 		}
 
 		switch rule.Action {
 		case "deny":
+			if verbose != nil {
+				fmt.Fprintf(verbose, "ward: DECISION: deny (%s)\n", rule.Message)
+			}
 			return &Result{
 				Action:  "deny",
 				Message: rule.Message,
@@ -481,12 +528,18 @@ func Evaluate(guard *Guard, state *State, event ToolEvent) (*Result, error) {
 	}
 
 	if len(contextMessages) > 0 {
+		if verbose != nil {
+			fmt.Fprintf(verbose, "ward: DECISION: context (%d messages)\n", len(contextMessages))
+		}
 		return &Result{
 			Action:  "context",
 			Message: strings.Join(contextMessages, "\n"),
 		}, nil
 	}
 
+	if verbose != nil {
+		fmt.Fprintf(verbose, "ward: DECISION: allow (no rules matched)\n")
+	}
 	return nil, nil // no rule matched — allow
 }
 

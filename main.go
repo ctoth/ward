@@ -84,14 +84,19 @@ Reads a JSON tool call event from stdin, evaluates all rules, and prints
 a response to stdout. Prints nothing if the call is allowed.
 
 Usage:
-  ward eval < event.json
+  ward eval [--verbose|-v] [--session ID] < event.json
+
+Flags:
+  -v, --verbose   Print debug info to stderr: each rule evaluated, scope
+                  match results, CEL expression outcomes (true/false/error),
+                  actions taken, and the final decision.
 
 The JSON format is auto-detected for Claude Code, Gemini CLI, and Codex CLI.
 
 Example:
   echo '{"hook_event_name":"PreToolUse","tool_name":"Bash",
     "tool_input":{"command":"git stash"},"session_id":"abc",
-    "cwd":"/tmp"}' | ward eval`
+    "cwd":"/tmp"}' | ward eval -v`
 
 const helpSet = `ward set - set the session phase
 
@@ -112,7 +117,18 @@ fact files in ~/.ward/facts/ and .ward/facts/.
 Usage:
   ward validate`
 
+func hasVerboseFlag(args []string) bool {
+	for _, a := range args {
+		if a == "--verbose" || a == "-v" {
+			return true
+		}
+	}
+	return false
+}
+
 func cmdEval() {
+	verbose := hasVerboseFlag(os.Args[2:])
+
 	input, err := io.ReadAll(os.Stdin)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ward: read stdin: %v\n", err)
@@ -138,7 +154,12 @@ func cmdEval() {
 
 	state.Update(event.Tool, event.Input)
 
-	result, err := Evaluate(guard, state, event)
+	var verboseWriter io.Writer
+	if verbose {
+		verboseWriter = os.Stderr
+	}
+
+	result, err := EvaluateVerbose(guard, state, event, verboseWriter)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ward: evaluate: %v\n", err)
 		os.Exit(1)
