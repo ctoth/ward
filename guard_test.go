@@ -982,6 +982,185 @@ func TestPhaseGatingCompoundPhaseMatch(t *testing.T) {
 	})
 }
 
+// --- WARD_RULES_PATH / WARD_FACTS_PATH tests ---
+
+func TestEnvPathDirsSingle(t *testing.T) {
+	dir := t.TempDir()
+	rulesDir := filepath.Join(dir, "rules")
+	if err := os.MkdirAll(rulesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFile(filepath.Join(rulesDir, "env-rule.yaml"), `
+when: 'tool == "Bash"'
+action: deny
+message: env rule fired
+`); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("WARD_RULES_PATH", rulesDir)
+
+	dirs := envPathDirs("WARD_RULES_PATH")
+	if len(dirs) != 1 || dirs[0] != rulesDir {
+		t.Fatalf("expected [%s], got %v", rulesDir, dirs)
+	}
+
+	rules, err := LoadRulesFromDir(rulesDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rules) != 1 {
+		t.Errorf("expected 1 rule from env path dir, got %d", len(rules))
+	}
+}
+
+func TestEnvPathDirsMultiple(t *testing.T) {
+	dir1 := t.TempDir()
+	dir2 := t.TempDir()
+
+	if err := writeFile(filepath.Join(dir1, "rule1.yaml"), `
+when: 'tool == "Bash"'
+action: deny
+message: rule1
+`); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFile(filepath.Join(dir2, "rule2.yaml"), `
+when: 'tool == "Edit"'
+action: context
+message: rule2
+`); err != nil {
+		t.Fatal(err)
+	}
+
+	sep := string(os.PathListSeparator)
+	t.Setenv("WARD_RULES_PATH", dir1+sep+dir2)
+
+	dirs := envPathDirs("WARD_RULES_PATH")
+	if len(dirs) != 2 {
+		t.Fatalf("expected 2 dirs, got %d: %v", len(dirs), dirs)
+	}
+
+	// Load rules from both
+	var allRules []Rule
+	for _, d := range dirs {
+		rules, err := LoadRulesFromDir(d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		allRules = append(allRules, rules...)
+	}
+	if len(allRules) != 2 {
+		t.Errorf("expected 2 rules from two env path dirs, got %d", len(allRules))
+	}
+}
+
+func TestEnvPathDirsNonexistent(t *testing.T) {
+	t.Setenv("WARD_RULES_PATH", "/nonexistent/ward/rules/dir")
+
+	dirs := envPathDirs("WARD_RULES_PATH")
+	if len(dirs) != 1 {
+		t.Fatalf("expected 1 dir entry, got %d", len(dirs))
+	}
+
+	// LoadRulesFromDir should handle nonexistent gracefully
+	rules, err := LoadRulesFromDir(dirs[0])
+	if err != nil {
+		t.Fatalf("expected no error for nonexistent dir, got %v", err)
+	}
+	if len(rules) != 0 {
+		t.Errorf("expected 0 rules from nonexistent dir, got %d", len(rules))
+	}
+}
+
+func TestEnvPathDirsEmpty(t *testing.T) {
+	t.Setenv("WARD_RULES_PATH", "")
+
+	dirs := envPathDirs("WARD_RULES_PATH")
+	if len(dirs) != 0 {
+		t.Errorf("expected 0 dirs for empty env var, got %d: %v", len(dirs), dirs)
+	}
+}
+
+func TestEnvPathDirsUnset(t *testing.T) {
+	// t.Setenv not called — env var not set
+	dirs := envPathDirs("WARD_RULES_PATH")
+	if len(dirs) != 0 {
+		t.Errorf("expected 0 dirs for unset env var, got %d: %v", len(dirs), dirs)
+	}
+}
+
+func TestEnvFactsPathSingle(t *testing.T) {
+	dir := t.TempDir()
+	if err := writeFile(filepath.Join(dir, "env_fact.yaml"), `
+command: echo env-fact-value
+`); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("WARD_FACTS_PATH", dir)
+
+	dirs := envPathDirs("WARD_FACTS_PATH")
+	if len(dirs) != 1 || dirs[0] != dir {
+		t.Fatalf("expected [%s], got %v", dir, dirs)
+	}
+
+	facts, err := LoadFactsFromDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(facts) != 1 {
+		t.Errorf("expected 1 fact from env path dir, got %d", len(facts))
+	}
+	if facts["env_fact"].Command != "echo env-fact-value" {
+		t.Errorf("unexpected command: %q", facts["env_fact"].Command)
+	}
+}
+
+func TestEnvFactsPathNonexistent(t *testing.T) {
+	t.Setenv("WARD_FACTS_PATH", "/nonexistent/ward/facts/dir")
+
+	dirs := envPathDirs("WARD_FACTS_PATH")
+	facts, err := LoadFactsFromDir(dirs[0])
+	if err != nil {
+		t.Fatalf("expected no error for nonexistent dir, got %v", err)
+	}
+	if facts != nil {
+		t.Errorf("expected nil from nonexistent dir, got %v", facts)
+	}
+}
+
+func TestLoadGuardWithEnvRulesPath(t *testing.T) {
+	// Create a temp dir with a rule, set WARD_RULES_PATH, and verify loadGuard picks it up
+	dir := t.TempDir()
+	if err := writeFile(filepath.Join(dir, "env-test-rule.yaml"), `
+when: 'tool == "Bash" && input.command == "env-test-sentinel"'
+action: deny
+message: env rule loaded
+`); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("WARD_RULES_PATH", dir)
+
+	guard, err := loadGuard()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The env rule should be among the guard's rules
+	found := false
+	for _, r := range guard.Rules {
+		if r.Message == "env rule loaded" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected env rule to be loaded via WARD_RULES_PATH, but it was not found")
+	}
+}
+
 // helper
 func writeFile(path, content string) error {
 	return os.WriteFile(path, []byte(content), 0o644)

@@ -5,9 +5,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 const envSession = "WARD_SESSION"
+const envRulesPath = "WARD_RULES_PATH"
+const envFactsPath = "WARD_FACTS_PATH"
 
 func main() {
 	if len(os.Args) < 2 || os.Args[1] == "--help" || os.Args[1] == "-h" {
@@ -76,6 +79,13 @@ Configuration:
   ~/.ward/rules/*.yaml   Global rules
   .ward/rules/*.yaml     Project rules
 
+Environment:
+  WARD_RULES_PATH   Additional rule directories (PATH-separated).
+                    Loaded between global and project rules.
+  WARD_FACTS_PATH   Additional fact directories (PATH-separated).
+                    Loaded between global and project facts.
+  WARD_SESSION      Session ID for phase tracking.
+
 Run 'ward <command> --help' for details on a command.`
 
 const helpEval = `ward eval - evaluate a tool call event
@@ -110,9 +120,14 @@ Example:
 
 const helpValidate = `ward validate - validate rule and fact files
 
-Scans rule files in both global (~/.ward/rules/) and project (.ward/rules/)
-directories, compiles each CEL expression, and reports errors. Also validates
-fact files in ~/.ward/facts/ and .ward/facts/.
+Scans rule files in global (~/.ward/rules/), WARD_RULES_PATH directories, and
+project (.ward/rules/) directories, compiles each CEL expression, and reports
+errors. Also validates fact files from ~/.ward/facts/, WARD_FACTS_PATH, and
+.ward/facts/.
+
+Priority: project-local rules are evaluated last. Deny-is-veto means the first
+deny wins. For facts, project values override env-path values which override
+global values.
 
 Usage:
   ward validate`
@@ -209,28 +224,51 @@ func cmdSet() {
 	fmt.Fprintf(os.Stderr, "ward: phase → %s\n", phase)
 }
 
+// labeledDir pairs a directory path with a label for validate output.
+type labeledDir struct {
+	path  string
+	label string
+}
+
 func cmdValidate() {
 	globalRulesDir, projectRulesDir := ruleDirs()
 	globalFactsDir, projectFactsDir := factsDirs()
+
+	// Build labeled directory lists
+	ruleDirList := []labeledDir{
+		{globalRulesDir, "global"},
+	}
+	for _, dir := range envPathDirs(envRulesPath) {
+		ruleDirList = append(ruleDirList, labeledDir{dir, "WARD_RULES_PATH"})
+	}
+	ruleDirList = append(ruleDirList, labeledDir{projectRulesDir, "project"})
+
+	factsDirList := []labeledDir{
+		{globalFactsDir, "global"},
+	}
+	for _, dir := range envPathDirs(envFactsPath) {
+		factsDirList = append(factsDirList, labeledDir{dir, "WARD_FACTS_PATH"})
+	}
+	factsDirList = append(factsDirList, labeledDir{projectFactsDir, "project"})
 
 	totalFiles := 0
 	totalErrors := 0
 
 	// Validate rules
 	fmt.Fprintf(os.Stderr, "Rules:\n")
-	for _, dir := range []string{globalRulesDir, projectRulesDir} {
-		entries, err := os.ReadDir(dir)
+	for _, ld := range ruleDirList {
+		entries, err := os.ReadDir(ld.path)
 		if err != nil {
 			if os.IsNotExist(err) {
-				fmt.Fprintf(os.Stderr, "  %s (not found, skipping)\n", dir)
+				fmt.Fprintf(os.Stderr, "  %s (%s, not found, skipping)\n", ld.path, ld.label)
 				continue
 			}
-			fmt.Fprintf(os.Stderr, "  %s: %v\n", dir, err)
+			fmt.Fprintf(os.Stderr, "  %s: %v\n", ld.path, err)
 			totalErrors++
 			continue
 		}
 
-		fmt.Fprintf(os.Stderr, "  %s\n", dir)
+		fmt.Fprintf(os.Stderr, "  %s (%s)\n", ld.path, ld.label)
 		for _, entry := range entries {
 			if entry.IsDir() {
 				continue
@@ -240,7 +278,7 @@ func cmdValidate() {
 				continue
 			}
 			totalFiles++
-			path := filepath.Join(dir, name)
+			path := filepath.Join(ld.path, name)
 			r, err := LoadRule(path)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "    FAIL  %s: %v\n", name, err)
@@ -258,19 +296,19 @@ func cmdValidate() {
 
 	// Validate facts
 	fmt.Fprintf(os.Stderr, "\nFacts:\n")
-	for _, dir := range []string{globalFactsDir, projectFactsDir} {
-		entries, err := os.ReadDir(dir)
+	for _, ld := range factsDirList {
+		entries, err := os.ReadDir(ld.path)
 		if err != nil {
 			if os.IsNotExist(err) {
-				fmt.Fprintf(os.Stderr, "  %s (not found, skipping)\n", dir)
+				fmt.Fprintf(os.Stderr, "  %s (%s, not found, skipping)\n", ld.path, ld.label)
 				continue
 			}
-			fmt.Fprintf(os.Stderr, "  %s: %v\n", dir, err)
+			fmt.Fprintf(os.Stderr, "  %s: %v\n", ld.path, err)
 			totalErrors++
 			continue
 		}
 
-		fmt.Fprintf(os.Stderr, "  %s\n", dir)
+		fmt.Fprintf(os.Stderr, "  %s (%s)\n", ld.path, ld.label)
 		for _, entry := range entries {
 			if entry.IsDir() {
 				continue
@@ -280,7 +318,7 @@ func cmdValidate() {
 				continue
 			}
 			totalFiles++
-			path := filepath.Join(dir, name)
+			path := filepath.Join(ld.path, name)
 			factName, _, err := LoadFact(path)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "    FAIL  %s: %v\n", name, err)
@@ -315,29 +353,70 @@ func loadGuard() (*Guard, error) {
 	globalRulesDir, projectRulesDir := ruleDirs()
 	globalFactsDir, projectFactsDir := factsDirs()
 
-	// Load rules from both directories
+	// Load rules: global → WARD_RULES_PATH → project
 	globalRules, err := LoadRulesFromDir(globalRulesDir)
 	if err != nil {
 		return nil, fmt.Errorf("global rules: %w", err)
 	}
+	allRules := globalRules
+
+	for _, dir := range envPathDirs(envRulesPath) {
+		extra, err := LoadRulesFromDir(dir)
+		if err != nil {
+			return nil, fmt.Errorf("WARD_RULES_PATH rules (%s): %w", dir, err)
+		}
+		allRules = append(allRules, extra...)
+	}
+
 	projectRules, err := LoadRulesFromDir(projectRulesDir)
 	if err != nil {
 		return nil, fmt.Errorf("project rules: %w", err)
 	}
-	allRules := append(globalRules, projectRules...)
+	allRules = append(allRules, projectRules...)
 
-	// Load facts from both directories
+	// Load facts: global → WARD_FACTS_PATH → project
 	globalFacts, err := LoadFactsFromDir(globalFactsDir)
 	if err != nil {
 		return nil, fmt.Errorf("global facts: %w", err)
 	}
+	allFacts := globalFacts
+	if allFacts == nil {
+		allFacts = make(map[string]Fact)
+	}
+
+	for _, dir := range envPathDirs(envFactsPath) {
+		extra, err := LoadFactsFromDir(dir)
+		if err != nil {
+			return nil, fmt.Errorf("WARD_FACTS_PATH facts (%s): %w", dir, err)
+		}
+		allFacts = MergeFacts(allFacts, extra)
+	}
+
 	projectFacts, err := LoadFactsFromDir(projectFactsDir)
 	if err != nil {
 		return nil, fmt.Errorf("project facts: %w", err)
 	}
-	allFacts := MergeFacts(globalFacts, projectFacts)
+	allFacts = MergeFacts(allFacts, projectFacts)
 
 	return NewGuard(allFacts, allRules)
+}
+
+// envPathDirs splits an environment variable by os.PathListSeparator
+// and returns non-empty directory paths.
+func envPathDirs(envVar string) []string {
+	val := os.Getenv(envVar)
+	if val == "" {
+		return nil
+	}
+	parts := filepath.SplitList(val)
+	var dirs []string
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			dirs = append(dirs, p)
+		}
+	}
+	return dirs
 }
 
 // ruleDirs returns (global, project) rule directories.
