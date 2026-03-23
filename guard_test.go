@@ -142,46 +142,62 @@ func TestNewState(t *testing.T) {
 	if s.Phase != "planning" {
 		t.Errorf("expected planning, got %q", s.Phase)
 	}
-	if s.ToolCount != 0 {
-		t.Errorf("expected 0 tool_count, got %d", s.ToolCount)
+	if len(s.History) != 0 {
+		t.Errorf("expected empty history, got %d entries", len(s.History))
 	}
 }
 
-func TestStateUpdateCounters(t *testing.T) {
+func TestStateHistory(t *testing.T) {
 	s := NewState("implementing")
 
 	s.Update("Read", nil)
 	s.Update("Read", nil)
 	s.Update("Read", nil)
 
-	if s.ToolCount != 3 {
-		t.Errorf("expected 3 tool_count, got %d", s.ToolCount)
+	if len(s.History) != 3 {
+		t.Errorf("expected 3 history entries, got %d", len(s.History))
 	}
-	if s.ReadsSinceBash != 3 {
-		t.Errorf("expected 3 reads_since_bash, got %d", s.ReadsSinceBash)
-	}
-	if s.ToolCounts["Read"] != 3 {
-		t.Errorf("expected Read count 3, got %d", s.ToolCounts["Read"])
+	for i, h := range s.History {
+		if h != "Read" {
+			t.Errorf("history[%d] = %q, want Read", i, h)
+		}
 	}
 
 	s.Update("Bash", map[string]any{"command": "ls"})
-	if s.ReadsSinceBash != 0 {
-		t.Errorf("expected 0 reads_since_bash after Bash, got %d", s.ReadsSinceBash)
+	if len(s.History) != 4 {
+		t.Errorf("expected 4 history entries, got %d", len(s.History))
+	}
+	if s.History[3] != "Bash" {
+		t.Errorf("expected Bash at end, got %q", s.History[3])
 	}
 }
 
-func TestStateUpdateEditsSinceCommit(t *testing.T) {
+func TestStateCommitMarker(t *testing.T) {
 	s := NewState("implementing")
 
 	s.Update("Edit", nil)
 	s.Update("Write", nil)
-	if s.EditsSinceCommit != 2 {
-		t.Errorf("expected 2 edits_since_commit, got %d", s.EditsSinceCommit)
-	}
-
 	s.Update("Bash", map[string]any{"command": "git commit -m 'test'"})
-	if s.EditsSinceCommit != 0 {
-		t.Errorf("expected 0 edits_since_commit after git commit, got %d", s.EditsSinceCommit)
+
+	// Should have: Edit, Write, _commit, Bash
+	expected := []string{"Edit", "Write", "_commit", "Bash"}
+	if len(s.History) != len(expected) {
+		t.Fatalf("expected %d history entries, got %d: %v", len(expected), len(s.History), s.History)
+	}
+	for i, want := range expected {
+		if s.History[i] != want {
+			t.Errorf("history[%d] = %q, want %q", i, s.History[i], want)
+		}
+	}
+}
+
+func TestStateHistoryCap(t *testing.T) {
+	s := NewState("implementing")
+	for i := 0; i < 110; i++ {
+		s.Update("Read", nil)
+	}
+	if len(s.History) != maxHistory {
+		t.Errorf("expected history capped at %d, got %d", maxHistory, len(s.History))
 	}
 }
 
@@ -273,7 +289,12 @@ func TestEvaluateEditInImplementingAllow(t *testing.T) {
 func TestEvaluateFlailingContext(t *testing.T) {
 	guard := loadTestGuard(t)
 	state := NewState("implementing")
-	state.ReadsSinceBash = 5
+	// Build up 4 reads in history; the 5th (the event itself) will be added by Update
+	// But Evaluate doesn't call Update — we need 5 reads already in history
+	// so the rule sees last 5 are all reads
+	for i := 0; i < 5; i++ {
+		state.History = append(state.History, "Read")
+	}
 
 	event := ToolEvent{
 		Tool:      "Read",
@@ -317,7 +338,7 @@ func TestEvaluateDenyVetoesContext(t *testing.T) {
 	// Create a guard with both a deny and context rule that match
 	cfg := &Config{DefaultPhase: "planning"}
 	rules := []Rule{
-		{When: `session.reads_since_bash >= 5`, Action: "context", Message: "flailing"},
+		{When: `size(last(session.history, 5)) == 5 && last(session.history, 5).all(t, t in ["Read", "Glob", "Grep"])`, Action: "context", Message: "flailing"},
 		{When: `tool == "Bash" && input.command.matches("python[3]?\\s+-c")`, Action: "deny", Message: "no python -c"},
 	}
 	guard, err := NewGuard(cfg, rules)
@@ -326,7 +347,9 @@ func TestEvaluateDenyVetoesContext(t *testing.T) {
 	}
 
 	state := NewState("implementing")
-	state.ReadsSinceBash = 5
+	for i := 0; i < 5; i++ {
+		state.History = append(state.History, "Read")
+	}
 	event := ToolEvent{
 		Tool:      "Bash",
 		Input:     map[string]any{"command": "python -c 'x'"},
@@ -349,8 +372,8 @@ func TestEvaluateDenyVetoesContext(t *testing.T) {
 func TestEvaluateContextAccumulates(t *testing.T) {
 	cfg := &Config{DefaultPhase: "planning"}
 	rules := []Rule{
-		{When: `session.reads_since_bash >= 5`, Action: "context", Message: "flailing"},
-		{When: `session.edits_since_commit >= 2`, Action: "context", Message: "uncommitted"},
+		{When: `size(last(session.history, 5)) == 5 && last(session.history, 5).all(t, t in ["Read", "Glob", "Grep"])`, Action: "context", Message: "flailing"},
+		{When: `since(session.history, "_commit").filter(t, t in ["Edit", "Write"]).size() >= 2`, Action: "context", Message: "uncommitted"},
 	}
 	guard, err := NewGuard(cfg, rules)
 	if err != nil {
@@ -358,8 +381,8 @@ func TestEvaluateContextAccumulates(t *testing.T) {
 	}
 
 	state := NewState("implementing")
-	state.ReadsSinceBash = 5
-	state.EditsSinceCommit = 3
+	// History: Edit, Write, Edit, Read x5 — triggers both rules
+	state.History = []string{"Edit", "Write", "Edit", "Read", "Read", "Read", "Read", "Read"}
 	event := ToolEvent{
 		Tool:      "Read",
 		Input:     map[string]any{"file_path": "/tmp/foo.go"},
@@ -466,8 +489,7 @@ func TestEvaluateWithScope(t *testing.T) {
 func TestStatePersistence(t *testing.T) {
 	sessionID := "test-persist-" + t.Name()
 	state := NewState("implementing")
-	state.ToolCount = 5
-	state.ToolCounts["Bash"] = 3
+	state.History = []string{"Read", "Bash", "Edit", "Bash", "Read"}
 
 	if err := SaveState(sessionID, state); err != nil {
 		t.Fatal(err)
@@ -481,11 +503,11 @@ func TestStatePersistence(t *testing.T) {
 	if loaded.Phase != "implementing" {
 		t.Errorf("expected implementing, got %q", loaded.Phase)
 	}
-	if loaded.ToolCount != 5 {
-		t.Errorf("expected 5, got %d", loaded.ToolCount)
+	if len(loaded.History) != 5 {
+		t.Errorf("expected 5 history entries, got %d", len(loaded.History))
 	}
-	if loaded.ToolCounts["Bash"] != 3 {
-		t.Errorf("expected 3, got %d", loaded.ToolCounts["Bash"])
+	if loaded.History[2] != "Edit" {
+		t.Errorf("expected Edit at index 2, got %q", loaded.History[2])
 	}
 }
 
