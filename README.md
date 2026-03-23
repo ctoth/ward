@@ -172,7 +172,7 @@ Each agent gets responses in its native format.
 **No python -c oneliners:**
 ```yaml
 # ~/.ward/rules/no-python-c.yaml
-when: 'tool == "Bash" && input.command.matches("python[3]?\\s+-c")'
+when: 'tool == "Bash" && input.commands.exists(c, c.full.matches("^python[3]?\\s+-c"))'
 action: deny
 message: "Write a .py file, then run it."
 ```
@@ -180,7 +180,7 @@ message: "Write a .py file, then run it."
 **Use uv, not bare python:**
 ```yaml
 # ~/.ward/rules/uv-not-python.yaml
-when: 'tool == "Bash" && input.command.matches("^python[3]?\\s") && facts.has_pyproject'
+when: 'tool == "Bash" && input.commands.exists(c, c.full.matches("^python[3]?\\s")) && facts.has_pyproject'
 action: deny
 message: "Use `uv run python` instead of bare python."
 ```
@@ -188,7 +188,7 @@ message: "Use `uv run python` instead of bare python."
 **No git stash:**
 ```yaml
 # ~/.ward/rules/no-git-stash.yaml
-when: 'tool == "Bash" && input.command.matches("git\\s+stash")'
+when: 'tool == "Bash" && input.commands.exists(c, c.name == "git" && c.full.matches("^git\\s+stash"))'
 action: deny
 message: "Commit or branch first. git stash destroys uncommitted work."
 ```
@@ -196,7 +196,7 @@ message: "Commit or branch first. git stash destroys uncommitted work."
 **No git add . or git add -A:**
 ```yaml
 # ~/.ward/rules/no-git-add-all.yaml
-when: 'tool == "Bash" && input.command.matches("git\\s+add\\s+(\\.|--all|-A)")'
+when: 'tool == "Bash" && input.commands.exists(c, c.name == "git" && c.full.matches("^git\\s+add\\s+(\\.|--all|-A)"))'
 action: deny
 message: "Add specific files by name."
 ```
@@ -204,7 +204,7 @@ message: "Add specific files by name."
 **No git reset --hard:**
 ```yaml
 # ~/.ward/rules/no-git-reset-hard.yaml
-when: 'tool == "Bash" && input.command.matches("git\\s+reset\\s+--hard")'
+when: 'tool == "Bash" && input.commands.exists(c, c.name == "git" && c.full.matches("^git\\s+reset\\s+--hard"))'
 action: deny
 message: "git reset --hard requires explicit permission."
 ```
@@ -212,7 +212,7 @@ message: "git reset --hard requires explicit permission."
 **No force push:**
 ```yaml
 # ~/.ward/rules/no-force-push.yaml
-when: 'tool == "Bash" && input.command.matches("git\\s+push\\s+.*--force")'
+when: 'tool == "Bash" && input.commands.exists(c, c.name == "git" && c.full.matches("^git\\s+push\\s+.*--force"))'
 action: deny
 message: "Force-push requires explicit permission."
 ```
