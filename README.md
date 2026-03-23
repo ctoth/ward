@@ -8,28 +8,34 @@ Session-aware guard for AI coding agents. Ward evaluates CEL rules against tool 
 go install github.com/ctoth/ward@latest
 ```
 
-## Configuration
+## Facts
 
-Config files hold non-rule settings (default phase, facts). Ward reads from two locations:
+Facts are shell commands evaluated on demand when referenced by rules. Each fact is one YAML file:
 
 | Path | Scope |
 |---|---|
-| `~/.ward/config.yaml` | Global (all projects) |
-| `.ward/config.yaml` | Project-specific (overrides global) |
+| `~/.ward/facts/*.yaml` | Global (all projects) |
+| `.ward/facts/*.yaml` | Project-specific (override global on name conflict) |
+
+The filename (minus extension) becomes the fact name:
 
 ```yaml
-# ~/.ward/config.yaml
-default_phase: planning
-
-facts:
-  git_branch:
-    command: "git branch --show-current"
-  has_pyproject:
-    command: "test -f pyproject.toml && echo true || echo false"
-    type: bool
+# ~/.ward/facts/git_branch.yaml
+command: "git branch --show-current"
 ```
 
-Project config overrides `default_phase` and merges `facts` (project wins on conflict).
+```yaml
+# ~/.ward/facts/has_pyproject.yaml
+command: "test -f pyproject.toml && echo true || echo false"
+type: bool
+```
+
+| Field | Required | Description |
+|---|---|---|
+| `command` | yes | Shell command to execute (via `bash -c`) |
+| `type` | no | `string` (default) or `bool` (`"true"`/`"1"` → true) |
+
+The default session phase is always "planning" (hardcoded, no config needed).
 
 ## Rules
 
