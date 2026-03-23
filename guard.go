@@ -12,6 +12,8 @@ import (
 
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
+	"github.com/google/cel-go/common/types/ref"
+	"github.com/google/cel-go/common/types/traits"
 	"gopkg.in/yaml.v3"
 )
 
@@ -138,14 +140,70 @@ func LoadRulesFromDir(dir string) ([]Rule, error) {
 	return rules, nil
 }
 
-// NewGuard creates a Guard from config and rules, compiling all CEL expressions.
-func NewGuard(cfg *Config, rules []Rule) (*Guard, error) {
-	env, err := cel.NewEnv(
+// celEnvOptions returns the shared CEL environment options including custom functions.
+func celEnvOptions() []cel.EnvOption {
+	return []cel.EnvOption{
 		cel.Variable("tool", cel.StringType),
 		cel.Variable("input", cel.MapType(cel.StringType, cel.DynType)),
 		cel.Variable("session", cel.MapType(cel.StringType, cel.DynType)),
 		cel.Variable("facts", cel.MapType(cel.StringType, cel.DynType)),
-	)
+
+		// last(list, n) — returns the last N elements of a list
+		cel.Function("last",
+			cel.Overload("last_list_int",
+				[]*cel.Type{cel.ListType(cel.DynType), cel.IntType},
+				cel.ListType(cel.DynType),
+				cel.BinaryBinding(func(lhs, rhs ref.Val) ref.Val {
+					list := lhs.(traits.Lister)
+					n := int64(rhs.(types.Int))
+					size := int64(list.Size().(types.Int))
+					start := size - n
+					if start < 0 {
+						start = 0
+					}
+					result := make([]ref.Val, 0, size-start)
+					for i := start; i < size; i++ {
+						result = append(result, list.Get(types.Int(i)))
+					}
+					return types.DefaultTypeAdapter.NativeToValue(result)
+				}),
+			),
+		),
+
+		// since(list, marker) — returns all elements after the last occurrence of marker
+		cel.Function("since",
+			cel.Overload("since_list_string",
+				[]*cel.Type{cel.ListType(cel.DynType), cel.StringType},
+				cel.ListType(cel.DynType),
+				cel.BinaryBinding(func(lhs, rhs ref.Val) ref.Val {
+					list := lhs.(traits.Lister)
+					marker := string(rhs.(types.String))
+					size := int64(list.Size().(types.Int))
+
+					// Find last occurrence of marker
+					lastIdx := int64(-1)
+					for i := int64(0); i < size; i++ {
+						val := list.Get(types.Int(i))
+						if s, ok := val.Value().(string); ok && s == marker {
+							lastIdx = i
+						}
+					}
+
+					start := lastIdx + 1 // if not found (-1), start=0 returns whole list
+					result := make([]ref.Val, 0, size-start)
+					for i := start; i < size; i++ {
+						result = append(result, list.Get(types.Int(i)))
+					}
+					return types.DefaultTypeAdapter.NativeToValue(result)
+				}),
+			),
+		),
+	}
+}
+
+// NewGuard creates a Guard from config and rules, compiling all CEL expressions.
+func NewGuard(cfg *Config, rules []Rule) (*Guard, error) {
+	env, err := cel.NewEnv(celEnvOptions()...)
 	if err != nil {
 		return nil, fmt.Errorf("cel env: %w", err)
 	}
@@ -172,12 +230,7 @@ func NewGuard(cfg *Config, rules []Rule) (*Guard, error) {
 // CompileRule compiles a single rule's CEL expression using the guard's environment.
 // Used by the validate command.
 func CompileRule(r *Rule) error {
-	env, err := cel.NewEnv(
-		cel.Variable("tool", cel.StringType),
-		cel.Variable("input", cel.MapType(cel.StringType, cel.DynType)),
-		cel.Variable("session", cel.MapType(cel.StringType, cel.DynType)),
-		cel.Variable("facts", cel.MapType(cel.StringType, cel.DynType)),
-	)
+	env, err := cel.NewEnv(celEnvOptions()...)
 	if err != nil {
 		return fmt.Errorf("cel env: %w", err)
 	}
@@ -191,61 +244,52 @@ func CompileRule(r *Rule) error {
 
 // Session State
 
+const maxHistory = 100
+
 type State struct {
-	Phase            string         `json:"phase"`
-	ToolCount        int            `json:"tool_count"`
-	ToolCounts       map[string]int `json:"tool_counts"`
-	LastTool         string         `json:"last_tool"`
-	ReadsSinceBash   int            `json:"reads_since_bash"`
-	EditsSinceCommit int            `json:"edits_since_commit"`
-	StartedAt        time.Time      `json:"started_at"`
+	Phase     string   `json:"phase"`
+	History   []string `json:"history"`
+	StartedAt time.Time `json:"started_at"`
 }
 
 func NewState(defaultPhase string) *State {
 	return &State{
-		Phase:      defaultPhase,
-		ToolCounts: make(map[string]int),
-		StartedAt:  time.Now(),
+		Phase:     defaultPhase,
+		History:   []string{},
+		StartedAt: time.Now(),
 	}
 }
 
 func (s *State) Update(tool string, input map[string]any) {
-	s.ToolCount++
-	s.ToolCounts[tool]++
-	s.LastTool = tool
-
-	if tool == "Bash" {
-		s.ReadsSinceBash = 0
-	}
-	if tool == "Read" || tool == "Glob" || tool == "Grep" {
-		s.ReadsSinceBash++
-	}
-
+	// Detect git commit in Bash commands and append synthetic marker
 	if tool == "Bash" {
 		if cmd, ok := input["command"].(string); ok {
 			if strings.Contains(cmd, "git commit") {
-				s.EditsSinceCommit = 0
+				s.appendHistory("_commit")
 			}
 		}
 	}
-	if tool == "Edit" || tool == "Write" {
-		s.EditsSinceCommit++
+	s.appendHistory(tool)
+}
+
+func (s *State) appendHistory(entry string) {
+	if len(s.History) >= maxHistory {
+		s.History = s.History[1:]
 	}
+	s.History = append(s.History, entry)
 }
 
 func (s *State) ToMap() map[string]any {
-	toolCounts := make(map[string]any, len(s.ToolCounts))
-	for k, v := range s.ToolCounts {
-		toolCounts[k] = int64(v)
+	// Convert []string to []any for CEL compatibility
+	history := make([]any, len(s.History))
+	for i, h := range s.History {
+		history[i] = h
 	}
 	return map[string]any{
-		"phase":              s.Phase,
-		"tool_count":         int64(s.ToolCount),
-		"tool_counts":        toolCounts,
-		"last_tool":          s.LastTool,
-		"reads_since_bash":   int64(s.ReadsSinceBash),
-		"edits_since_commit": int64(s.EditsSinceCommit),
-		"started_at":         s.StartedAt.Format(time.RFC3339),
+		"phase":      s.Phase,
+		"history":    history,
+		"tool_count": int64(len(s.History)),
+		"started_at": s.StartedAt.Format(time.RFC3339),
 	}
 }
 
@@ -267,8 +311,8 @@ func LoadState(sessionID string) (*State, error) {
 	if err := json.Unmarshal(data, &s); err != nil {
 		return nil, err
 	}
-	if s.ToolCounts == nil {
-		s.ToolCounts = make(map[string]int)
+	if s.History == nil {
+		s.History = []string{}
 	}
 	return &s, nil
 }
