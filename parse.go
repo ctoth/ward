@@ -114,7 +114,7 @@ func writeWordPart(sb *strings.Builder, part syntax.WordPart) {
 		sb.WriteString("$(…)")
 	case *syntax.ProcSubst:
 		sb.WriteString("<(…)")
-	case *syntax.ArithExp:
+	case *syntax.ArithmExp:
 		sb.WriteString("$((…))")
 	default:
 		// Unknown part type — skip rather than crash
