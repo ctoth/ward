@@ -218,15 +218,23 @@ func TestStateHistoryCap(t *testing.T) {
 	}
 }
 
-func TestEvaluatePythonCDeny(t *testing.T) {
-	guard := loadTestGuard(t)
-	state := NewState("implementing")
+// bashEvent creates a Bash ToolEvent with parsed commands enrichment.
+func bashEvent(t *testing.T, command string) ToolEvent {
+	t.Helper()
 	event := ToolEvent{
 		Tool:      "Bash",
-		Input:     map[string]any{"command": "python -c \"print('hello')\""},
+		Input:     map[string]any{"command": command},
 		SessionID: "test",
 		CWD:       t.TempDir(),
 	}
+	enrichBashCommands(&event)
+	return event
+}
+
+func TestEvaluatePythonCDeny(t *testing.T) {
+	guard := loadTestGuard(t)
+	state := NewState("implementing")
+	event := bashEvent(t, "python -c \"print('hello')\"")
 
 	result, err := Evaluate(guard, state, event)
 	if err != nil {
@@ -243,12 +251,7 @@ func TestEvaluatePythonCDeny(t *testing.T) {
 func TestEvaluateGitStashDeny(t *testing.T) {
 	guard := loadTestGuard(t)
 	state := NewState("implementing")
-	event := ToolEvent{
-		Tool:      "Bash",
-		Input:     map[string]any{"command": "git stash"},
-		SessionID: "test",
-		CWD:       t.TempDir(),
-	}
+	event := bashEvent(t, "git stash")
 
 	result, err := Evaluate(guard, state, event)
 	if err != nil {
