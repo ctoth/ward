@@ -1,0 +1,3 @@
+when: 'tool == "Bash" && input.command.matches("git\\s+add\\s+(\\.|--all|-A)")'
+action: deny
+message: "Add specific files by name."

@@ -1,0 +1,3 @@
+when: 'tool == "Bash" && input.command.matches("python[3]?\\s+-c")'
+action: deny
+message: "Write a .py file, then run it."

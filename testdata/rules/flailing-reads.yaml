@@ -1,0 +1,3 @@
+when: 'session.reads_since_bash >= 3'
+action: context
+message: "3+ files read without running anything."

@@ -1,0 +1,3 @@
+when: 'tool == "Bash" && input.command.matches("^python[3]?\\s") && facts.has_pyproject'
+action: deny
+message: "Use uv run python instead of bare python."

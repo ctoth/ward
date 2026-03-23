@@ -1,0 +1,3 @@
+when: 'session.edits_since_commit >= 2'
+action: context
+message: "2+ files edited without committing."

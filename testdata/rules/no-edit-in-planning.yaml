@@ -1,0 +1,3 @@
+when: 'session.phase == "planning" && tool in ["Edit", "Write"]'
+action: deny
+message: "Planning phase. Present your plan first."
