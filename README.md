@@ -99,6 +99,27 @@ Rules have access to these variables:
 | `session.tool_count` | int | Total tool calls this session (derived from history length) |
 | `facts.*` | any | Computed facts from config (shell commands, evaluated on demand) |
 
+### Parsed commands (`input.commands`)
+
+For Bash tool calls, ward parses the shell command into an AST and adds `input.commands` — a list of maps, one per command in the pipeline/chain. Each map has:
+
+| Field | Type | Description |
+|---|---|---|
+| `name` | string | The command name (first word, e.g., `git`, `python`) |
+| `full` | string | The full command reconstructed from the AST (`name arg1 arg2 ...`), excluding heredoc bodies and command substitution contents |
+
+This means rules can match against actual commands rather than raw text:
+
+```yaml
+# Old (matches "python -c" anywhere in the raw string, including commit messages):
+when: 'tool == "Bash" && input.command.matches("python[3]?\\s+-c")'
+
+# New (matches only if an actual command is python with -c flag):
+when: 'tool == "Bash" && input.commands.exists(c, c.full.matches("^python[3]?\\s+-c"))'
+```
+
+If shell parsing fails (invalid syntax), ward falls back to treating the raw string as a single command, so rules still work.
+
 ### Custom CEL functions
 
 | Function | Signature | Description |
