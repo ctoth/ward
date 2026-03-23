@@ -1,8 +1,0 @@
-default_phase: planning
-
-facts:
-  git_branch:
-    command: "echo main"
-  has_pyproject:
-    command: "echo true"
-    type: bool

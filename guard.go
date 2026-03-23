@@ -17,12 +17,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Config holds non-rule settings: default phase and facts.
-// Loaded from ~/.ward/config.yaml (global) and .ward/config.yaml (project override).
-type Config struct {
-	DefaultPhase string          `yaml:"default_phase"`
-	Facts        map[string]Fact `yaml:"facts"`
-}
+// DefaultPhase is always "planning" — no config needed.
+const DefaultPhase = "planning"
 
 // Rule is a single guard rule, loaded from one YAML file.
 type Rule struct {
@@ -41,49 +37,71 @@ type Fact struct {
 	Type    string `yaml:"type"` // "string" (default) or "bool"
 }
 
-// Guard holds compiled config + rules, ready for evaluation.
+// Guard holds compiled facts + rules, ready for evaluation.
 type Guard struct {
-	Config Config
-	Rules  []Rule
-	env    *cel.Env
+	Facts map[string]Fact
+	Rules []Rule
+	env   *cel.Env
 }
 
-// LoadConfig reads a config YAML (no rules). Missing file returns defaults.
-func LoadConfig(path string) (*Config, error) {
+// LoadFact reads a single fact from a YAML file.
+// The fact name is derived from the filename (minus extension).
+func LoadFact(path string) (string, *Fact, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return &Config{DefaultPhase: "planning"}, nil
-		}
-		return nil, fmt.Errorf("read %s: %w", path, err)
+		return "", nil, fmt.Errorf("read %s: %w", path, err)
 	}
 
-	var cfg Config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("parse %s: %w", path, err)
+	var f Fact
+	if err := yaml.Unmarshal(data, &f); err != nil {
+		return "", nil, fmt.Errorf("parse %s: %w", path, err)
 	}
 
-	if cfg.DefaultPhase == "" {
-		cfg.DefaultPhase = "planning"
+	if f.Command == "" {
+		return "", nil, fmt.Errorf("%s: missing 'command' field", path)
 	}
-	return &cfg, nil
+
+	name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	return name, &f, nil
 }
 
-// MergeConfigs merges project config over global config.
-// Project overrides default_phase if set; facts are merged (project wins on conflict).
-func MergeConfigs(global, project *Config) *Config {
-	merged := &Config{
-		DefaultPhase: global.DefaultPhase,
-		Facts:        make(map[string]Fact),
+// LoadFactsFromDir walks a directory and loads all .yaml/.yml files as facts.
+// Returns empty map if directory doesn't exist.
+func LoadFactsFromDir(dir string) (map[string]Fact, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read dir %s: %w", dir, err)
 	}
-	for k, v := range global.Facts {
-		merged.Facts[k] = v
+
+	facts := make(map[string]Fact)
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".yaml") && !strings.HasSuffix(name, ".yml") {
+			continue
+		}
+		factName, f, err := LoadFact(filepath.Join(dir, name))
+		if err != nil {
+			return nil, err
+		}
+		facts[factName] = *f
 	}
-	if project.DefaultPhase != "" && project.DefaultPhase != "planning" {
-		merged.DefaultPhase = project.DefaultPhase
+	return facts, nil
+}
+
+// MergeFacts merges project facts over global facts. Project wins on conflict.
+func MergeFacts(global, project map[string]Fact) map[string]Fact {
+	merged := make(map[string]Fact)
+	for k, v := range global {
+		merged[k] = v
 	}
-	for k, v := range project.Facts {
-		merged.Facts[k] = v
+	for k, v := range project {
+		merged[k] = v
 	}
 	return merged
 }
@@ -201,8 +219,12 @@ func celEnvOptions() []cel.EnvOption {
 	}
 }
 
-// NewGuard creates a Guard from config and rules, compiling all CEL expressions.
-func NewGuard(cfg *Config, rules []Rule) (*Guard, error) {
+// NewGuard creates a Guard from facts and rules, compiling all CEL expressions.
+func NewGuard(facts map[string]Fact, rules []Rule) (*Guard, error) {
+	if facts == nil {
+		facts = make(map[string]Fact)
+	}
+
 	env, err := cel.NewEnv(celEnvOptions()...)
 	if err != nil {
 		return nil, fmt.Errorf("cel env: %w", err)
@@ -221,9 +243,9 @@ func NewGuard(cfg *Config, rules []Rule) (*Guard, error) {
 	}
 
 	return &Guard{
-		Config: *cfg,
-		Rules:  rules,
-		env:    env,
+		Facts: facts,
+		Rules: rules,
+		env:   env,
 	}, nil
 }
 
@@ -252,9 +274,12 @@ type State struct {
 	StartedAt time.Time `json:"started_at"`
 }
 
-func NewState(defaultPhase string) *State {
+func NewState(phase string) *State {
+	if phase == "" {
+		phase = DefaultPhase
+	}
 	return &State{
-		Phase:     defaultPhase,
+		Phase:     phase,
 		History:   []string{},
 		StartedAt: time.Now(),
 	}
@@ -386,7 +411,7 @@ func Evaluate(guard *Guard, state *State, event ToolEvent) (*Result, error) {
 	// Compute only needed facts
 	factsMap := make(map[string]any)
 	for name := range neededFacts {
-		fact, ok := guard.Config.Facts[name]
+		fact, ok := guard.Facts[name]
 		if !ok {
 			continue
 		}
