@@ -43,10 +43,19 @@ func DetectAndParse(data []byte) (ToolEvent, AgentType, error) {
 		return ToolEvent{}, 0, fmt.Errorf("invalid JSON: %w", err)
 	}
 
+	var event ToolEvent
+	var agent AgentType
+	var err error
+
 	// Codex: has nested hook_event.event_type
 	if hookEvent, ok := raw["hook_event"].(map[string]any); ok {
 		if _, hasEventType := hookEvent["event_type"]; hasEventType {
-			return parseCodex(raw, hookEvent)
+			event, agent, err = parseCodex(raw, hookEvent)
+			if err != nil {
+				return event, agent, err
+			}
+			enrichBashCommands(&event)
+			return event, agent, nil
 		}
 	}
 
@@ -54,13 +63,41 @@ func DetectAndParse(data []byte) (ToolEvent, AgentType, error) {
 	if eventName, ok := raw["hook_event_name"].(string); ok {
 		switch eventName {
 		case "PreToolUse", "PostToolUse", "PostToolUseFailure":
-			return parseClaude(raw, eventName)
+			event, agent, err = parseClaude(raw, eventName)
 		case "BeforeTool", "AfterTool":
-			return parseGemini(raw, eventName)
+			event, agent, err = parseGemini(raw, eventName)
+		}
+		if err != nil {
+			return event, agent, err
+		}
+		if event.Tool != "" {
+			enrichBashCommands(&event)
+			return event, agent, nil
 		}
 	}
 
 	return ToolEvent{}, 0, fmt.Errorf("cannot detect agent from JSON (no hook_event_name or hook_event.event_type)")
+}
+
+// enrichBashCommands adds parsed shell commands to Bash tool events.
+// input.commands is a list of maps with "name" and "full" keys.
+func enrichBashCommands(event *ToolEvent) {
+	if event.Tool != "Bash" && event.Tool != "local_shell" {
+		return
+	}
+	cmd, ok := event.Input["command"].(string)
+	if !ok || cmd == "" {
+		return
+	}
+	parsed := ParseCommands(cmd)
+	commands := make([]any, len(parsed))
+	for i, p := range parsed {
+		commands[i] = map[string]any{
+			"name": p.Name,
+			"full": p.Full,
+		}
+	}
+	event.Input["commands"] = commands
 }
 
 func parseClaude(raw map[string]any, eventName string) (ToolEvent, AgentType, error) {
