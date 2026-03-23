@@ -87,12 +87,16 @@ Rules have access to these variables:
 | `tool` | string | Tool name: "Bash", "Edit", "Write", "Read", etc. |
 | `input` | map | Tool-specific input (e.g., `input.command`, `input.file_path`) |
 | `session.phase` | string | Current phase ("planning", "implementing", etc.) |
-| `session.tool_count` | int | Total tool calls this session |
-| `session.tool_counts` | map | Per-tool call counts |
-| `session.last_tool` | string | Previous tool name |
-| `session.reads_since_bash` | int | Read/Glob/Grep calls since last Bash |
-| `session.edits_since_commit` | int | Edit/Write calls since last git commit |
+| `session.history` | list(string) | Tool names in call order (capped at 100). Includes synthetic `_commit` marker when a Bash call contains "git commit". |
+| `session.tool_count` | int | Total tool calls this session (derived from history length) |
 | `facts.*` | any | Computed facts from config (shell commands, evaluated on demand) |
+
+### Custom CEL functions
+
+| Function | Signature | Description |
+|---|---|---|
+| `last` | `last(list, n) -> list` | Returns the last N elements. If the list has fewer than N elements, returns the whole list. |
+| `since` | `since(list, marker) -> list` | Returns all elements after the last occurrence of `marker`. If `marker` never appears, returns the whole list. |
 
 All paths are normalized to forward slashes internally, including on Windows.
 
@@ -197,7 +201,7 @@ message: "Create a feature branch before editing files."
 **Nudge to commit after multiple edits:**
 ```yaml
 # ~/.ward/rules/commit-after-edits.yaml
-when: 'session.edits_since_commit >= 2'
+when: 'since(session.history, "_commit").filter(t, t in ["Edit", "Write"]).size() >= 2'
 action: context
 message: "You have edited 2+ files without committing. Commit your work — uncommitted work does not exist."
 ```
@@ -225,7 +229,7 @@ message: "Investigating phase. Diagnose only — report findings first."
 **Possible flailing — too many reads without running anything:**
 ```yaml
 # ~/.ward/rules/flailing-reads.yaml
-when: 'session.reads_since_bash >= 5'
+when: 'size(last(session.history, 5)) == 5 && last(session.history, 5).all(t, t in ["Read", "Glob", "Grep"])'
 action: context
 message: "You have read 5+ files without running anything. State your theory about what is wrong before reading more."
 ```
