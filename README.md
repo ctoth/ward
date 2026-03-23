@@ -134,6 +134,8 @@ Each agent gets responses in its native format.
 
 ## Example rules
 
+### Safety: block dangerous commands
+
 **No python -c oneliners:**
 ```yaml
 # ~/.ward/rules/no-python-c.yaml
@@ -142,13 +144,65 @@ action: deny
 message: "Write a .py file, then run it."
 ```
 
+**Use uv, not bare python:**
+```yaml
+# ~/.ward/rules/uv-not-python.yaml
+when: 'tool == "Bash" && input.command.matches("^python[3]?\\s") && facts.has_pyproject'
+action: deny
+message: "Use `uv run python` instead of bare python."
+```
+
 **No git stash:**
 ```yaml
 # ~/.ward/rules/no-git-stash.yaml
 when: 'tool == "Bash" && input.command.matches("git\\s+stash")'
 action: deny
-message: "Commit or branch first."
+message: "Commit or branch first. git stash destroys uncommitted work."
 ```
+
+**No git add . or git add -A:**
+```yaml
+# ~/.ward/rules/no-git-add-all.yaml
+when: 'tool == "Bash" && input.command.matches("git\\s+add\\s+(\\.|--all|-A)")'
+action: deny
+message: "Add specific files by name."
+```
+
+**No git reset --hard:**
+```yaml
+# ~/.ward/rules/no-git-reset-hard.yaml
+when: 'tool == "Bash" && input.command.matches("git\\s+reset\\s+--hard")'
+action: deny
+message: "git reset --hard requires explicit permission."
+```
+
+**No force push:**
+```yaml
+# ~/.ward/rules/no-force-push.yaml
+when: 'tool == "Bash" && input.command.matches("git\\s+push\\s+.*--force")'
+action: deny
+message: "Force-push requires explicit permission."
+```
+
+### Git discipline: branch before editing, commit frequently
+
+**No editing on main/master:**
+```yaml
+# ~/.ward/rules/branch-before-edit.yaml
+when: 'tool in ["Edit", "Write"] && facts.git_branch in ["main", "master"]'
+action: deny
+message: "Create a feature branch before editing files."
+```
+
+**Nudge to commit after multiple edits:**
+```yaml
+# ~/.ward/rules/commit-after-edits.yaml
+when: 'session.edits_since_commit >= 2'
+action: context
+message: "You have edited 2+ files without committing. Commit your work — uncommitted work does not exist."
+```
+
+### Phase enforcement
 
 **No editing during planning:**
 ```yaml
@@ -158,10 +212,31 @@ action: deny
 message: "Planning phase. Present your plan first."
 ```
 
-**Warn on flailing reads:**
+**No editing during investigation:**
+```yaml
+# .ward/rules/no-edit-in-investigating.yaml
+when: 'session.phase == "investigating" && tool in ["Edit", "Write"]'
+action: deny
+message: "Investigating phase. Diagnose only — report findings first."
+```
+
+### Behavioral nudges
+
+**Possible flailing — too many reads without running anything:**
 ```yaml
 # ~/.ward/rules/flailing-reads.yaml
-when: 'session.reads_since_bash >= 3'
+when: 'session.reads_since_bash >= 5'
 action: context
-message: "3+ files read without running anything. Are you flailing?"
+message: "You have read 5+ files without running anything. State your theory about what is wrong before reading more."
+```
+
+### File scope: protect generated output
+
+**No editing generated files:**
+```yaml
+# .ward/rules/no-edit-generated.yaml
+scope: "output/**"
+when: 'tool in ["Edit", "Write"]'
+action: deny
+message: "Fix upstream (templates, schema, annotations) — generated files are read-only."
 ```

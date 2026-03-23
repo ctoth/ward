@@ -273,7 +273,7 @@ func TestEvaluateEditInImplementingAllow(t *testing.T) {
 func TestEvaluateFlailingContext(t *testing.T) {
 	guard := loadTestGuard(t)
 	state := NewState("implementing")
-	state.ReadsSinceBash = 3
+	state.ReadsSinceBash = 5
 
 	event := ToolEvent{
 		Tool:      "Read",
@@ -317,7 +317,7 @@ func TestEvaluateDenyVetoesContext(t *testing.T) {
 	// Create a guard with both a deny and context rule that match
 	cfg := &Config{DefaultPhase: "planning"}
 	rules := []Rule{
-		{When: `session.reads_since_bash >= 3`, Action: "context", Message: "flailing"},
+		{When: `session.reads_since_bash >= 5`, Action: "context", Message: "flailing"},
 		{When: `tool == "Bash" && input.command.matches("python[3]?\\s+-c")`, Action: "deny", Message: "no python -c"},
 	}
 	guard, err := NewGuard(cfg, rules)
@@ -349,7 +349,7 @@ func TestEvaluateDenyVetoesContext(t *testing.T) {
 func TestEvaluateContextAccumulates(t *testing.T) {
 	cfg := &Config{DefaultPhase: "planning"}
 	rules := []Rule{
-		{When: `session.reads_since_bash >= 3`, Action: "context", Message: "flailing"},
+		{When: `session.reads_since_bash >= 5`, Action: "context", Message: "flailing"},
 		{When: `session.edits_since_commit >= 2`, Action: "context", Message: "uncommitted"},
 	}
 	guard, err := NewGuard(cfg, rules)
