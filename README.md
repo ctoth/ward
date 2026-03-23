@@ -93,7 +93,7 @@ Rules have access to these variables:
 | Variable | Type | Description |
 |---|---|---|
 | `tool` | string | Tool name: "Bash", "Edit", "Write", "Read", etc. |
-| `input` | map | Tool-specific input (e.g., `input.command`, `input.file_path`) |
+| `input` | map | Tool-specific input (e.g., `input.command`, `input.file_path`). For Bash tools, also includes `input.commands` — a list of parsed command maps (see below). |
 | `session.phase` | string | Current phase ("planning", "implementing", etc.) |
 | `session.history` | list(string) | Tool names in call order (capped at 100). Includes synthetic `_commit` marker when a Bash call contains "git commit". |
 | `session.tool_count` | int | Total tool calls this session (derived from history length) |
