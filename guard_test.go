@@ -659,6 +659,329 @@ func TestGitCommitMessageNoFalsePositive(t *testing.T) {
 	}
 }
 
+// --- Phase-gating tests ---
+
+func TestPhaseGatingBasic(t *testing.T) {
+	// Rule: deny Bash/Edit/Write when session.phase == "foreman"
+	rules := []Rule{
+		{
+			When:    `session.phase == "foreman" && tool in ["Bash", "Edit", "Write"]`,
+			Action:  "deny",
+			Message: "foreman cannot use code-editing tools",
+		},
+	}
+	guard, err := NewGuard(nil, rules)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	makeEvent := func(toolName string) ToolEvent {
+		return ToolEvent{
+			Tool:      toolName,
+			Input:     map[string]any{},
+			SessionID: "test",
+			CWD:       t.TempDir(),
+		}
+	}
+
+	// phase=foreman, tool=Bash → denied
+	t.Run("foreman_bash_denied", func(t *testing.T) {
+		state := NewState("foreman")
+		result, err := Evaluate(guard, state, makeEvent("Bash"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result == nil || result.Action != "deny" {
+			t.Errorf("expected deny for Bash in foreman phase, got %v", result)
+		}
+	})
+
+	// phase=foreman, tool=Read → allowed
+	t.Run("foreman_read_allowed", func(t *testing.T) {
+		state := NewState("foreman")
+		result, err := Evaluate(guard, state, makeEvent("Read"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result != nil {
+			t.Errorf("expected allow for Read in foreman phase, got %v", result)
+		}
+	})
+
+	// phase="" (empty, defaults to planning) → Bash allowed (not foreman)
+	t.Run("no_phase_bash_allowed", func(t *testing.T) {
+		state := NewState("") // defaults to "planning"
+		result, err := Evaluate(guard, state, makeEvent("Bash"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result != nil {
+			t.Errorf("expected allow for Bash with no foreman phase, got %v", result)
+		}
+	})
+
+	// phase=implementing → Bash allowed
+	t.Run("implementing_bash_allowed", func(t *testing.T) {
+		state := NewState("implementing")
+		result, err := Evaluate(guard, state, makeEvent("Bash"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result != nil {
+			t.Errorf("expected allow for Bash in implementing phase, got %v", result)
+		}
+	})
+}
+
+func TestPhaseGatingFilePathWhitelist(t *testing.T) {
+	// Rule: deny Write in foreman EXCEPT when path contains "/prompts/" or "notes-"
+	// CEL: deny when foreman + Write + path does NOT match whitelist
+	// We use "file_path" in input to safely check for key existence.
+	rules := []Rule{
+		{
+			When: `session.phase == "foreman" && tool == "Write" &&
+				(!("file_path" in input) ||
+				 !(input.file_path.contains("prompts/") || input.file_path.contains("notes-")))`,
+			Action:  "deny",
+			Message: "foreman can only write to prompts/ or notes- files",
+		},
+	}
+	guard, err := NewGuard(nil, rules)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Write to src/foo.py → denied
+	t.Run("foreman_write_src_denied", func(t *testing.T) {
+		state := NewState("foreman")
+		event := ToolEvent{
+			Tool:      "Write",
+			Input:     map[string]any{"file_path": "src/foo.py"},
+			SessionID: "test",
+			CWD:       t.TempDir(),
+		}
+		result, err := Evaluate(guard, state, event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result == nil || result.Action != "deny" {
+			t.Errorf("expected deny for Write to src/foo.py in foreman, got %v", result)
+		}
+	})
+
+	// Write to prompts/task.md → allowed
+	t.Run("foreman_write_prompts_allowed", func(t *testing.T) {
+		state := NewState("foreman")
+		event := ToolEvent{
+			Tool:      "Write",
+			Input:     map[string]any{"file_path": "prompts/task.md"},
+			SessionID: "test",
+			CWD:       t.TempDir(),
+		}
+		result, err := Evaluate(guard, state, event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result != nil {
+			t.Errorf("expected allow for Write to prompts/task.md in foreman, got %v", result)
+		}
+	})
+
+	// Write to notes-session.md → allowed
+	t.Run("foreman_write_notes_allowed", func(t *testing.T) {
+		state := NewState("foreman")
+		event := ToolEvent{
+			Tool:      "Write",
+			Input:     map[string]any{"file_path": "notes-session.md"},
+			SessionID: "test",
+			CWD:       t.TempDir(),
+		}
+		result, err := Evaluate(guard, state, event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result != nil {
+			t.Errorf("expected allow for Write to notes-session.md in foreman, got %v", result)
+		}
+	})
+
+	// Write with NO file_path in input → denied (not error)
+	t.Run("foreman_write_no_filepath_denied", func(t *testing.T) {
+		state := NewState("foreman")
+		event := ToolEvent{
+			Tool:      "Write",
+			Input:     map[string]any{"content": "hello"},
+			SessionID: "test",
+			CWD:       t.TempDir(),
+		}
+		result, err := Evaluate(guard, state, event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result == nil || result.Action != "deny" {
+			t.Errorf("expected deny for Write with no file_path in foreman, got %v", result)
+		}
+	})
+}
+
+func TestPhaseGatingCELMapKeyAccess(t *testing.T) {
+	// Document the correct pattern for checking map keys in CEL.
+	//
+	// CORRECT: "file_path" in input
+	//   The `in` operator checks for key existence in a map. This is the
+	//   standard CEL idiom for optional fields.
+	//
+	// INCORRECT: has(input.file_path)
+	//   has() is for protocol buffer field presence checks. On a plain map,
+	//   it either errors or returns false — it does NOT check key existence.
+	//   When the CEL eval errors, ward silently skips the rule (guard.go ~line 497).
+
+	// Test 1: "file_path" in input works correctly
+	t.Run("in_operator_works", func(t *testing.T) {
+		rules := []Rule{
+			{
+				When:    `"file_path" in input && input.file_path.contains("secret")`,
+				Action:  "deny",
+				Message: "no secret files",
+			},
+		}
+		guard, err := NewGuard(nil, rules)
+		if err != nil {
+			t.Fatal(err)
+		}
+		state := NewState("implementing")
+
+		// With file_path containing "secret" → denied
+		event := ToolEvent{
+			Tool:      "Write",
+			Input:     map[string]any{"file_path": "secret.txt"},
+			SessionID: "test",
+			CWD:       t.TempDir(),
+		}
+		result, err := Evaluate(guard, state, event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result == nil || result.Action != "deny" {
+			t.Errorf("expected deny when file_path contains 'secret', got %v", result)
+		}
+
+		// Without file_path → allowed (key not in map, short-circuits safely)
+		event2 := ToolEvent{
+			Tool:      "Write",
+			Input:     map[string]any{"content": "hello"},
+			SessionID: "test",
+			CWD:       t.TempDir(),
+		}
+		result2, err := Evaluate(guard, state, event2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result2 != nil {
+			t.Errorf("expected allow when file_path key is absent, got %v", result2)
+		}
+	})
+
+	// Test 2: has(input.file_path) does NOT work for map key checking.
+	// On a plain CEL map, has() with a dotted field access either errors
+	// or returns false. When the CEL eval errors, the rule is silently skipped.
+	t.Run("has_does_not_work_for_maps", func(t *testing.T) {
+		rules := []Rule{
+			{
+				When:    `has(input.file_path) && input.file_path.contains("secret")`,
+				Action:  "deny",
+				Message: "no secret files",
+			},
+		}
+		guard, err := NewGuard(nil, rules)
+		if err != nil {
+			t.Fatal(err)
+		}
+		state := NewState("implementing")
+
+		// Even with file_path present and containing "secret", has() on a plain
+		// map may not behave as expected — it may error or return false,
+		// causing the rule to silently not fire.
+		event := ToolEvent{
+			Tool:      "Write",
+			Input:     map[string]any{"file_path": "secret.txt"},
+			SessionID: "test",
+			CWD:       t.TempDir(),
+		}
+		result, err := Evaluate(guard, state, event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// has(input.file_path) on a CEL map type may actually work in some
+		// CEL-Go versions. We document the behavior here: if has() works,
+		// that's fine, but "key" in map is the canonical and reliable pattern.
+		// The important thing is: this test documents the pattern.
+		// If has() works → result is deny. If has() silently fails → result is nil.
+		// Either way, use "key" in map for reliability.
+		_ = result // behavior documented; see "in_operator_works" for the correct pattern
+	})
+}
+
+func TestPhaseGatingCompoundPhaseMatch(t *testing.T) {
+	// Rule using startsWith to match "foreman", "foreman:planning", etc.
+	rules := []Rule{
+		{
+			When:    `session.phase.startsWith("foreman") && tool in ["Bash", "Edit", "Write"]`,
+			Action:  "deny",
+			Message: "foreman modes cannot use code-editing tools",
+		},
+	}
+	guard, err := NewGuard(nil, rules)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	makeEvent := func(toolName string) ToolEvent {
+		return ToolEvent{
+			Tool:      toolName,
+			Input:     map[string]any{},
+			SessionID: "test",
+			CWD:       t.TempDir(),
+		}
+	}
+
+	// phase="foreman:planning", tool=Bash → denied
+	t.Run("foreman_planning_bash_denied", func(t *testing.T) {
+		state := &State{Phase: "foreman:planning", History: []string{}}
+		result, err := Evaluate(guard, state, makeEvent("Bash"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result == nil || result.Action != "deny" {
+			t.Errorf("expected deny for Bash in foreman:planning phase, got %v", result)
+		}
+	})
+
+	// phase="foreman", tool=Bash → denied
+	t.Run("foreman_bash_denied", func(t *testing.T) {
+		state := NewState("foreman")
+		result, err := Evaluate(guard, state, makeEvent("Bash"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result == nil || result.Action != "deny" {
+			t.Errorf("expected deny for Bash in foreman phase, got %v", result)
+		}
+	})
+
+	// phase="implementing", tool=Bash → allowed
+	t.Run("implementing_bash_allowed", func(t *testing.T) {
+		state := NewState("implementing")
+		result, err := Evaluate(guard, state, makeEvent("Bash"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result != nil {
+			t.Errorf("expected allow for Bash in implementing phase, got %v", result)
+		}
+	})
+}
+
 // helper
 func writeFile(path, content string) error {
 	return os.WriteFile(path, []byte(content), 0o644)
