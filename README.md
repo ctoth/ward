@@ -51,7 +51,7 @@ Rules live in two directories, one file per rule:
 Each file is one rule:
 
 ```yaml
-when: 'tool == "Bash" && input.command.matches("python[3]?\\s+-c")'
+when: 'tool == "Bash" && input.commands.exists(c, c.full.matches("^python[3]?\\s+-c"))'
 action: deny
 message: "Write a .py file, then run it."
 ```
