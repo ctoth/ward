@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"os"
@@ -206,10 +207,6 @@ func cmdSet() {
 	}
 	phase := os.Args[2]
 	sessionID := sessionFromArgs()
-	if sessionID == "" {
-		fmt.Fprintln(os.Stderr, "ward: session ID required (--session or WARD_SESSION env var)")
-		os.Exit(1)
-	}
 
 	state, err := LoadState(sessionID)
 	if err != nil {
@@ -345,7 +342,16 @@ func sessionFromArgs() string {
 			return os.Args[i+1]
 		}
 	}
-	return os.Getenv(envSession)
+	if v := os.Getenv(envSession); v != "" {
+		return v
+	}
+	// Default: deterministic session ID from working directory.
+	wd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	h := sha256.Sum256([]byte(wd))
+	return fmt.Sprintf("wd-%x", h[:8])
 }
 
 // loadGuard discovers facts and rules from standard locations, compiles them.
