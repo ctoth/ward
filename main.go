@@ -12,6 +12,7 @@ import (
 const envSession = "WARD_SESSION"
 const envRulesPath = "WARD_RULES_PATH"
 const envFactsPath = "WARD_FACTS_PATH"
+const envSignalsPath = "WARD_SIGNALS_PATH"
 
 func main() {
 	if len(os.Args) < 2 || os.Args[1] == "--help" || os.Args[1] == "-h" {
@@ -35,6 +36,18 @@ func main() {
 			os.Exit(0)
 		}
 		cmdSet()
+	case "allow":
+		if hasHelpFlag(os.Args[2:]) {
+			fmt.Fprintln(os.Stderr, helpAllow)
+			os.Exit(0)
+		}
+		cmdAllow()
+	case "revoke":
+		if hasHelpFlag(os.Args[2:]) {
+			fmt.Fprintln(os.Stderr, helpRevoke)
+			os.Exit(0)
+		}
+		cmdRevoke()
 	case "validate":
 		if hasHelpFlag(os.Args[2:]) {
 			fmt.Fprintln(os.Stderr, helpValidate)
@@ -72,6 +85,8 @@ Usage:
 Commands:
   eval       Evaluate a tool call event from stdin
   set        Set the session phase
+  allow      Add a one-time override signal
+  revoke     Remove an override signal
   validate   Validate all rule and fact files
 
 Configuration:
@@ -86,6 +101,8 @@ Environment:
   WARD_FACTS_PATH   Additional fact directories (PATH-separated).
                     Loaded between global and project facts.
   WARD_SESSION      Session ID for phase tracking.
+  WARD_SIGNALS_PATH Additional signal definition directories (PATH-separated).
+                    Loaded between global and project signal definitions.
 
 Run 'ward <command> --help' for details on a command.`
 
@@ -133,6 +150,38 @@ global values.
 Usage:
   ward validate`
 
+const helpAllow = `ward allow - add a one-time override signal
+
+Usage:
+  ward allow <signal-name> [--session ID]
+
+Adds a named signal to the session. Rules can check signals with
+session.signals.contains("signal-name"). By default, signals are
+consumed after the evaluation where they are checked.
+
+To make a signal persistent, create a YAML definition:
+  ~/.ward/signals/<signal-name>.yaml
+with one_time_use: false
+
+Signal definitions are loaded from:
+  ~/.ward/signals/          (global)
+  $WARD_SIGNALS_PATH dirs   (env, PATH-separated)
+  .ward/signals/            (project, overrides others)
+
+Example:
+  ward allow force-push --session abc`
+
+const helpRevoke = `ward revoke - remove an override signal
+
+Usage:
+  ward revoke <signal-name> [--session ID]
+
+Removes a named signal from the session. No error if the signal
+was not active.
+
+Example:
+  ward revoke force-push --session abc`
+
 func hasVerboseFlag(args []string) bool {
 	for _, a := range args {
 		if a == "--verbose" || a == "-v" {
@@ -175,11 +224,14 @@ func cmdEval() {
 		verboseWriter = os.Stderr
 	}
 
-	result, err := EvaluateVerbose(guard, state, event, verboseWriter)
+	result, matchedSignals, err := EvaluateVerbose(guard, state, event, verboseWriter)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ward: evaluate: %v\n", err)
 		os.Exit(1)
 	}
+
+	// Consume one-time-use signals that were referenced by matched rules
+	state.ConsumeSignals(matchedSignals)
 
 	if err := SaveState(event.SessionID, state); err != nil {
 		fmt.Fprintf(os.Stderr, "ward: save state: %v\n", err)
@@ -198,6 +250,77 @@ func cmdEval() {
 		return
 	}
 	fmt.Println(string(out))
+}
+
+func cmdAllow() {
+	if len(os.Args) < 3 {
+		fmt.Fprintln(os.Stderr, "usage: ward allow <signal-name> [--session ID]")
+		os.Exit(1)
+	}
+	name := os.Args[2]
+	if !validSignalName.MatchString(name) {
+		fmt.Fprintf(os.Stderr, "ward: invalid signal name %q\n", name)
+		os.Exit(1)
+	}
+	sessionID := sessionFromArgs()
+
+	state, err := LoadState(sessionID)
+	if err != nil {
+		state = NewState("")
+	}
+
+	// Default to one-time use unless a signal definition says otherwise.
+	oneTime := true
+
+	// Check signal definition directories for overrides.
+	home, _ := os.UserHomeDir()
+	searchDirs := []string{filepath.Join(home, ".ward", "signals")}
+	for _, dir := range envPathDirs(envSignalsPath) {
+		searchDirs = append(searchDirs, dir)
+	}
+	cwd, _ := os.Getwd()
+	searchDirs = append(searchDirs, filepath.Join(cwd, ".ward", "signals"))
+
+	for _, dir := range searchDirs {
+		defs, _ := LoadSignalDefsFromDir(dir)
+		if def, ok := defs[name]; ok {
+			if def.OneTimeUse != nil {
+				oneTime = *def.OneTimeUse
+			}
+		}
+	}
+
+	state.Signals[name] = Signal{OneTimeUse: oneTime}
+
+	if err := SaveState(sessionID, state); err != nil {
+		fmt.Fprintf(os.Stderr, "ward: save state: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Fprintf(os.Stderr, "ward: signal %q activated\n", name)
+}
+
+func cmdRevoke() {
+	if len(os.Args) < 3 {
+		fmt.Fprintln(os.Stderr, "usage: ward revoke <signal-name> [--session ID]")
+		os.Exit(1)
+	}
+	name := os.Args[2]
+	sessionID := sessionFromArgs()
+
+	state, err := LoadState(sessionID)
+	if err != nil {
+		// No state means no signal to revoke.
+		fmt.Fprintf(os.Stderr, "ward: signal %q not active (no session state)\n", name)
+		return
+	}
+
+	delete(state.Signals, name)
+
+	if err := SaveState(sessionID, state); err != nil {
+		fmt.Fprintf(os.Stderr, "ward: save state: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Fprintf(os.Stderr, "ward: signal %q revoked\n", name)
 }
 
 func cmdSet() {
