@@ -269,10 +269,16 @@ func CompileRule(r *Rule) error {
 
 const maxHistory = 100
 
+// Signal represents a named permission stored in session state.
+type Signal struct {
+	OneTimeUse bool `json:"one_time_use"`
+}
+
 type State struct {
-	Phase     string   `json:"phase"`
-	History   []string `json:"history"`
-	StartedAt time.Time `json:"started_at"`
+	Phase     string            `json:"phase"`
+	History   []string          `json:"history"`
+	Signals   map[string]Signal `json:"signals"`
+	StartedAt time.Time         `json:"started_at"`
 }
 
 func NewState(phase string) *State {
@@ -282,6 +288,7 @@ func NewState(phase string) *State {
 	return &State{
 		Phase:     phase,
 		History:   []string{},
+		Signals:   make(map[string]Signal),
 		StartedAt: time.Now(),
 	}
 }
@@ -309,12 +316,97 @@ func (s *State) ToMap() map[string]any {
 	for i, h := range s.History {
 		history[i] = h
 	}
+
+	signals := make([]any, 0, len(s.Signals))
+	for name := range s.Signals {
+		signals = append(signals, name)
+	}
+
 	return map[string]any{
 		"phase":      s.Phase,
 		"history":    history,
 		"tool_count": int64(len(s.History)),
 		"started_at": s.StartedAt.Format(time.RFC3339),
+		"signals":    signals,
 	}
+}
+
+// ConsumeSignals removes one-time-use signals that were checked by matched rules.
+func (s *State) ConsumeSignals(checked map[string]bool) {
+	for name, sig := range s.Signals {
+		if sig.OneTimeUse && checked[name] {
+			delete(s.Signals, name)
+		}
+	}
+}
+
+// validSignalName matches allowed signal names.
+var validSignalName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]*$`)
+
+// SignalDef is a signal definition loaded from a YAML file.
+type SignalDef struct {
+	OneTimeUse  *bool  `yaml:"one_time_use"` // pointer to distinguish absent from false
+	Description string `yaml:"description"`
+}
+
+// LoadSignalDef reads a single signal definition from a YAML file.
+// The signal name is derived from the filename (minus extension).
+func LoadSignalDef(path string) (string, *SignalDef, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", nil, err
+	}
+	var def SignalDef
+	if err := yaml.Unmarshal(data, &def); err != nil {
+		return "", nil, err
+	}
+	name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	return name, &def, nil
+}
+
+// LoadSignalDefsFromDir walks a directory and loads all .yaml/.yml files as signal definitions.
+// Returns empty map if directory doesn't exist.
+func LoadSignalDefsFromDir(dir string) (map[string]SignalDef, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read dir %s: %w", dir, err)
+	}
+
+	defs := make(map[string]SignalDef)
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".yaml") && !strings.HasSuffix(name, ".yml") {
+			continue
+		}
+		defName, def, err := LoadSignalDef(filepath.Join(dir, name))
+		if err != nil {
+			return nil, err
+		}
+		defs[defName] = *def
+	}
+	return defs, nil
+}
+
+// signalsReferencedByRules extracts all signal names referenced in rules' When expressions.
+func signalsReferencedByRules(rules []Rule) map[string]bool {
+	refs := make(map[string]bool)
+	for _, rule := range rules {
+		for _, match := range signalRefRe.FindAllStringSubmatch(rule.When, -1) {
+			// Group 1: session.signals.contains("x"), Group 2: "x" in session.signals
+			if match[1] != "" {
+				refs[match[1]] = true
+			} else if match[2] != "" {
+				refs[match[2]] = true
+			}
+		}
+	}
+	return refs
 }
 
 func stateDir() string {
@@ -337,6 +429,9 @@ func LoadState(sessionID string) (*State, error) {
 	}
 	if s.History == nil {
 		s.History = []string{}
+	}
+	if s.Signals == nil {
+		s.Signals = make(map[string]Signal)
 	}
 	return &s, nil
 }
@@ -388,17 +483,21 @@ type Result struct {
 }
 
 var factsRefRe = regexp.MustCompile(`facts\.(\w+)`)
+// signalRefRe matches both session.signals.contains("x") and "x" in session.signals
+var signalRefRe = regexp.MustCompile(`(?:session\.signals\.contains\("([^"]+)"\)|"([^"]+)"\s+in\s+session\.signals)`)
 
 // Evaluate checks all rules against the event. Deny-is-veto:
 // - Any deny → denied (first deny message used)
 // - No denies, some context → all context messages joined
 // - Nothing matches → allowed (nil)
-func Evaluate(guard *Guard, state *State, event ToolEvent) (*Result, error) {
+// Returns the result, the set of signal names referenced by matched rules, and any error.
+func Evaluate(guard *Guard, state *State, event ToolEvent) (*Result, map[string]bool, error) {
 	return EvaluateVerbose(guard, state, event, nil)
 }
 
 // EvaluateVerbose is like Evaluate but writes debug info to verbose when non-nil.
-func EvaluateVerbose(guard *Guard, state *State, event ToolEvent, verbose io.Writer) (*Result, error) {
+// Returns the result, the set of signal names referenced by matched rules, and any error.
+func EvaluateVerbose(guard *Guard, state *State, event ToolEvent, verbose io.Writer) (*Result, map[string]bool, error) {
 	sessionMap := state.ToMap()
 
 	if verbose != nil {
@@ -446,6 +545,7 @@ func EvaluateVerbose(guard *Guard, state *State, event ToolEvent, verbose io.Wri
 	}
 
 	// Collect all matching results: deny-is-veto, context accumulates
+	matchedSignals := make(map[string]bool)
 	var contextMessages []string
 	for _, rule := range guard.Rules {
 		ruleLabel := rule.filename
@@ -511,6 +611,11 @@ func EvaluateVerbose(guard *Guard, state *State, event ToolEvent, verbose io.Wri
 			fmt.Fprintf(verbose, "ward:   rule %s: eval=true → %s\n", ruleLabel, rule.Action)
 		}
 
+		// Rule matched — extract signal references from this rule
+		for _, match := range signalRefRe.FindAllStringSubmatch(rule.When, -1) {
+			matchedSignals[match[1]] = true
+		}
+
 		switch rule.Action {
 		case "deny":
 			if verbose != nil {
@@ -519,7 +624,7 @@ func EvaluateVerbose(guard *Guard, state *State, event ToolEvent, verbose io.Wri
 			return &Result{
 				Action:  "deny",
 				Message: rule.Message,
-			}, nil
+			}, matchedSignals, nil
 		case "context":
 			contextMessages = append(contextMessages, rule.Message)
 		case "allow":
@@ -534,13 +639,13 @@ func EvaluateVerbose(guard *Guard, state *State, event ToolEvent, verbose io.Wri
 		return &Result{
 			Action:  "context",
 			Message: strings.Join(contextMessages, "\n"),
-		}, nil
+		}, matchedSignals, nil
 	}
 
 	if verbose != nil {
 		fmt.Fprintf(verbose, "ward: DECISION: allow (no rules matched)\n")
 	}
-	return nil, nil // no rule matched — allow
+	return nil, matchedSignals, nil // no rule matched — allow
 }
 
 func computeFact(fact Fact, cwd string) (any, error) {
