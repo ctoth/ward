@@ -105,8 +105,8 @@ func TestLoadRulesFromDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rules) != 7 {
-		t.Errorf("expected 7 rules, got %d", len(rules))
+	if len(rules) != 8 {
+		t.Errorf("expected 8 rules, got %d", len(rules))
 	}
 }
 
@@ -254,7 +254,7 @@ func TestEvaluatePythonCDeny(t *testing.T) {
 	state := NewState("implementing")
 	event := bashEvent(t, "python -c \"print('hello')\"")
 
-	result, err := Evaluate(guard, state, event)
+	result, _, err := Evaluate(guard, state, event)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -271,7 +271,7 @@ func TestEvaluateGitStashDeny(t *testing.T) {
 	state := NewState("implementing")
 	event := bashEvent(t, "git stash")
 
-	result, err := Evaluate(guard, state, event)
+	result, _, err := Evaluate(guard, state, event)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -293,7 +293,7 @@ func TestEvaluateEditInPlanningDeny(t *testing.T) {
 		CWD:       t.TempDir(),
 	}
 
-	result, err := Evaluate(guard, state, event)
+	result, _, err := Evaluate(guard, state, event)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -315,7 +315,7 @@ func TestEvaluateEditInImplementingAllow(t *testing.T) {
 		CWD:       t.TempDir(),
 	}
 
-	result, err := Evaluate(guard, state, event)
+	result, _, err := Evaluate(guard, state, event)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -341,7 +341,7 @@ func TestEvaluateFlailingContext(t *testing.T) {
 		CWD:       t.TempDir(),
 	}
 
-	result, err := Evaluate(guard, state, event)
+	result, _, err := Evaluate(guard, state, event)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -358,7 +358,7 @@ func TestEvaluateSafeCommandAllow(t *testing.T) {
 	state := NewState("implementing")
 	event := bashEvent(t, "ls -la")
 
-	result, err := Evaluate(guard, state, event)
+	result, _, err := Evaluate(guard, state, event)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -389,7 +389,7 @@ func TestEvaluateCodexLocalShellMatchesBashRules(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := Evaluate(guard, state, event)
+	result, _, err := Evaluate(guard, state, event)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -418,7 +418,7 @@ func TestEvaluateDenyVetoesContext(t *testing.T) {
 	}
 	event := bashEvent(t, "python -c 'x'")
 
-	result, err := Evaluate(guard, state, event)
+	result, _, err := Evaluate(guard, state, event)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -450,7 +450,7 @@ func TestEvaluateContextAccumulates(t *testing.T) {
 		CWD:       t.TempDir(),
 	}
 
-	result, err := Evaluate(guard, state, event)
+	result, _, err := Evaluate(guard, state, event)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -521,7 +521,7 @@ func TestEvaluateWithScope(t *testing.T) {
 		SessionID: "test",
 		CWD:       t.TempDir(),
 	}
-	result, err := Evaluate(guard, state, event)
+	result, _, err := Evaluate(guard, state, event)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -536,7 +536,7 @@ func TestEvaluateWithScope(t *testing.T) {
 		SessionID: "test",
 		CWD:       t.TempDir(),
 	}
-	result2, err := Evaluate(guard, state, event2)
+	result2, _, err := Evaluate(guard, state, event2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -590,7 +590,7 @@ func TestHeredocFalsePositive(t *testing.T) {
 	state := NewState("implementing")
 	event := bashEvent(t, "git commit -m \"$(cat <<'EOF'\npython -c blah\nEOF\n)\"")
 
-	result, err := Evaluate(guard, state, event)
+	result, _, err := Evaluate(guard, state, event)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -605,7 +605,7 @@ func TestPipeChainTriggers(t *testing.T) {
 	state := NewState("implementing")
 	event := bashEvent(t, "echo foo | python -c \"import sys\"")
 
-	result, err := Evaluate(guard, state, event)
+	result, _, err := Evaluate(guard, state, event)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -620,7 +620,7 @@ func TestAndChainTriggers(t *testing.T) {
 	state := NewState("implementing")
 	event := bashEvent(t, "cd /tmp && python -c \"print(1)\"")
 
-	result, err := Evaluate(guard, state, event)
+	result, _, err := Evaluate(guard, state, event)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -635,7 +635,7 @@ func TestSafeArgsNoFalsePositive(t *testing.T) {
 	state := NewState("implementing")
 	event := bashEvent(t, `echo "git stash is bad"`)
 
-	result, err := Evaluate(guard, state, event)
+	result, _, err := Evaluate(guard, state, event)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -650,7 +650,7 @@ func TestGitCommitMessageNoFalsePositive(t *testing.T) {
 	state := NewState("implementing")
 	event := bashEvent(t, `git commit -m "python -c is forbidden"`)
 
-	result, err := Evaluate(guard, state, event)
+	result, _, err := Evaluate(guard, state, event)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -687,7 +687,7 @@ func TestPhaseGatingBasic(t *testing.T) {
 	// phase=foreman, tool=Bash → denied
 	t.Run("foreman_bash_denied", func(t *testing.T) {
 		state := NewState("foreman")
-		result, err := Evaluate(guard, state, makeEvent("Bash"))
+		result, _, err := Evaluate(guard, state, makeEvent("Bash"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -699,7 +699,7 @@ func TestPhaseGatingBasic(t *testing.T) {
 	// phase=foreman, tool=Read → allowed
 	t.Run("foreman_read_allowed", func(t *testing.T) {
 		state := NewState("foreman")
-		result, err := Evaluate(guard, state, makeEvent("Read"))
+		result, _, err := Evaluate(guard, state, makeEvent("Read"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -711,7 +711,7 @@ func TestPhaseGatingBasic(t *testing.T) {
 	// phase="" (empty, defaults to planning) → Bash allowed (not foreman)
 	t.Run("no_phase_bash_allowed", func(t *testing.T) {
 		state := NewState("") // defaults to "planning"
-		result, err := Evaluate(guard, state, makeEvent("Bash"))
+		result, _, err := Evaluate(guard, state, makeEvent("Bash"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -723,7 +723,7 @@ func TestPhaseGatingBasic(t *testing.T) {
 	// phase=implementing → Bash allowed
 	t.Run("implementing_bash_allowed", func(t *testing.T) {
 		state := NewState("implementing")
-		result, err := Evaluate(guard, state, makeEvent("Bash"))
+		result, _, err := Evaluate(guard, state, makeEvent("Bash"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -760,7 +760,7 @@ func TestPhaseGatingFilePathWhitelist(t *testing.T) {
 			SessionID: "test",
 			CWD:       t.TempDir(),
 		}
-		result, err := Evaluate(guard, state, event)
+		result, _, err := Evaluate(guard, state, event)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -778,7 +778,7 @@ func TestPhaseGatingFilePathWhitelist(t *testing.T) {
 			SessionID: "test",
 			CWD:       t.TempDir(),
 		}
-		result, err := Evaluate(guard, state, event)
+		result, _, err := Evaluate(guard, state, event)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -796,7 +796,7 @@ func TestPhaseGatingFilePathWhitelist(t *testing.T) {
 			SessionID: "test",
 			CWD:       t.TempDir(),
 		}
-		result, err := Evaluate(guard, state, event)
+		result, _, err := Evaluate(guard, state, event)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -814,7 +814,7 @@ func TestPhaseGatingFilePathWhitelist(t *testing.T) {
 			SessionID: "test",
 			CWD:       t.TempDir(),
 		}
-		result, err := Evaluate(guard, state, event)
+		result, _, err := Evaluate(guard, state, event)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -858,7 +858,7 @@ func TestPhaseGatingCELMapKeyAccess(t *testing.T) {
 			SessionID: "test",
 			CWD:       t.TempDir(),
 		}
-		result, err := Evaluate(guard, state, event)
+		result, _, err := Evaluate(guard, state, event)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -873,7 +873,7 @@ func TestPhaseGatingCELMapKeyAccess(t *testing.T) {
 			SessionID: "test",
 			CWD:       t.TempDir(),
 		}
-		result2, err := Evaluate(guard, state, event2)
+		result2, _, err := Evaluate(guard, state, event2)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -908,7 +908,7 @@ func TestPhaseGatingCELMapKeyAccess(t *testing.T) {
 			SessionID: "test",
 			CWD:       t.TempDir(),
 		}
-		result, err := Evaluate(guard, state, event)
+		result, _, err := Evaluate(guard, state, event)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -948,7 +948,7 @@ func TestPhaseGatingCompoundPhaseMatch(t *testing.T) {
 	// phase="foreman:planning", tool=Bash → denied
 	t.Run("foreman_planning_bash_denied", func(t *testing.T) {
 		state := &State{Phase: "foreman:planning", History: []string{}}
-		result, err := Evaluate(guard, state, makeEvent("Bash"))
+		result, _, err := Evaluate(guard, state, makeEvent("Bash"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -960,7 +960,7 @@ func TestPhaseGatingCompoundPhaseMatch(t *testing.T) {
 	// phase="foreman", tool=Bash → denied
 	t.Run("foreman_bash_denied", func(t *testing.T) {
 		state := NewState("foreman")
-		result, err := Evaluate(guard, state, makeEvent("Bash"))
+		result, _, err := Evaluate(guard, state, makeEvent("Bash"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -972,7 +972,7 @@ func TestPhaseGatingCompoundPhaseMatch(t *testing.T) {
 	// phase="implementing", tool=Bash → allowed
 	t.Run("implementing_bash_allowed", func(t *testing.T) {
 		state := NewState("implementing")
-		result, err := Evaluate(guard, state, makeEvent("Bash"))
+		result, _, err := Evaluate(guard, state, makeEvent("Bash"))
 		if err != nil {
 			t.Fatal(err)
 		}
