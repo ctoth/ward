@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -54,6 +55,12 @@ func main() {
 			os.Exit(0)
 		}
 		cmdValidate()
+	case "end-session":
+		if hasHelpFlag(os.Args[2:]) {
+			fmt.Fprintln(os.Stderr, helpEndSession)
+			os.Exit(0)
+		}
+		cmdEndSession()
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
 		fmt.Fprintln(os.Stderr, "Run 'ward --help' for usage.")
@@ -83,11 +90,12 @@ Usage:
   ward <command> [args]
 
 Commands:
-  eval       Evaluate a tool call event from stdin
-  set        Set the session phase
-  allow      Add a one-time override signal
-  revoke     Remove an override signal
-  validate   Validate all rule and fact files
+  eval          Evaluate a tool call event from stdin
+  set           Set the session phase
+  allow         Add a one-time override signal
+  revoke        Remove an override signal
+  end-session   Clean up session registry (SessionEnd hook)
+  validate      Validate all rule and fact files
 
 Configuration:
   ~/.ward/facts/*.yaml   Global facts (shell commands evaluated on demand)
@@ -150,6 +158,16 @@ global values.
 Usage:
   ward validate`
 
+const helpEndSession = `ward end-session - clean up session registry
+
+Reads a SessionEnd event from stdin (JSON with session_id), removes the
+process tree registry entry for that session. Use as a SessionEnd hook.
+
+Usage:
+  ward end-session < event.json
+
+The session_id is read from the stdin JSON, same format as other hooks.`
+
 const helpAllow = `ward allow - add a one-time override signal
 
 Usage:
@@ -210,6 +228,14 @@ func cmdEval() {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ward: parse input: %v\n", err)
 		os.Exit(1)
+	}
+
+	// Register CC PID → session_id so `ward allow` can resolve sessions
+	// from the process tree when run via `!` inside Claude Code.
+	if event.SessionID != "" {
+		if ccPID, err := findClaudeCodeAncestorPID(); err == nil && ccPID != 0 {
+			_ = registerSession(ccPID, event.SessionID, event.CWD)
+		}
 	}
 
 	state, err := LoadState(event.SessionID)
@@ -321,6 +347,31 @@ func cmdRevoke() {
 		os.Exit(1)
 	}
 	fmt.Fprintf(os.Stderr, "ward: signal %q revoked\n", name)
+}
+
+func cmdEndSession() {
+	input, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ward: read stdin: %v\n", err)
+		os.Exit(1)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(input, &raw); err != nil {
+		fmt.Fprintf(os.Stderr, "ward: parse input: %v\n", err)
+		os.Exit(1)
+	}
+
+	sessionID, _ := raw["session_id"].(string)
+	if sessionID == "" {
+		fmt.Fprintln(os.Stderr, "ward: no session_id in input")
+		os.Exit(1)
+	}
+
+	if err := unregisterBySessionID(sessionID); err != nil {
+		fmt.Fprintf(os.Stderr, "ward: unregister: %v\n", err)
+	}
+	fmt.Fprintf(os.Stderr, "ward: session ended %s\n", sessionID)
 }
 
 func cmdSet() {
@@ -468,7 +519,12 @@ func sessionFromArgs() string {
 	if v := os.Getenv(envSession); v != "" {
 		return v
 	}
-	// Default: deterministic session ID from working directory.
+	// Try process tree: if running inside Claude Code, resolve session
+	// from the CC ancestor PID registry.
+	if sid := resolveSessionFromProcessTree(); sid != "" {
+		return sid
+	}
+	// Fallback: deterministic session ID from working directory.
 	wd, err := os.Getwd()
 	if err != nil {
 		return ""
