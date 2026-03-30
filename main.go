@@ -61,6 +61,18 @@ func main() {
 			os.Exit(0)
 		}
 		cmdEndSession()
+	case "install":
+		if hasHelpFlag(os.Args[2:]) {
+			fmt.Fprintln(os.Stderr, helpInstall)
+			os.Exit(0)
+		}
+		cmdInstall()
+	case "uninstall":
+		if hasHelpFlag(os.Args[2:]) {
+			fmt.Fprintln(os.Stderr, helpUninstall)
+			os.Exit(0)
+		}
+		cmdUninstall()
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
 		fmt.Fprintln(os.Stderr, "Run 'ward --help' for usage.")
@@ -95,6 +107,8 @@ Commands:
   allow         Add a one-time override signal
   revoke        Remove an override signal
   end-session   Clean up session registry (SessionEnd hook)
+  install       Register ward hooks in Claude Code settings
+  uninstall     Remove ward hooks from Claude Code settings
   validate      Validate all rule and fact files
 
 Configuration:
@@ -167,6 +181,23 @@ Usage:
   ward end-session < event.json
 
 The session_id is read from the stdin JSON, same format as other hooks.`
+
+const helpInstall = `ward install - register ward hooks in Claude Code settings
+
+Adds ward's PreToolUse (eval) and SessionEnd (end-session) hooks to
+~/.claude/settings.json. Idempotent — safe to run multiple times.
+Preserves all other hooks (claudio, etc).
+
+Usage:
+  ward install`
+
+const helpUninstall = `ward uninstall - remove ward hooks from Claude Code settings
+
+Removes ward's hooks from ~/.claude/settings.json.
+Preserves all other hooks.
+
+Usage:
+  ward uninstall`
 
 const helpAllow = `ward allow - add a one-time override signal
 

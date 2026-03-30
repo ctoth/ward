@@ -3,9 +3,12 @@ module github.com/ctoth/ward
 go 1.25.0
 
 require (
+	github.com/ctoth/captain-hook v0.0.0
 	github.com/google/cel-go v0.27.0
 	gopkg.in/yaml.v3 v3.0.1
 )
+
+replace github.com/ctoth/captain-hook => ../captain-hook
 
 require (
 	cel.dev/expr v0.25.1 // indirect
