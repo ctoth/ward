@@ -32,13 +32,13 @@ func wardExePath() string {
 	if p, err := exec.LookPath("ward"); err == nil {
 		abs, err := filepath.Abs(p)
 		if err == nil {
-			return abs
+			return filepath.ToSlash(abs)
 		}
-		return p
+		return filepath.ToSlash(p)
 	}
 	// Fall back to current executable
 	if p, err := os.Executable(); err == nil {
-		return p
+		return filepath.ToSlash(p)
 	}
 	return "ward"
 }
