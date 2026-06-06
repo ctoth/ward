@@ -7,4 +7,4 @@ when: |
      )
   && !("force-push" in session.signals)
 action: deny
-message: "Force-push requires explicit permission. Use 'ward allow force-push' to override."
+message: "Force-push requires explicit permission. Run: ward allow force-push"

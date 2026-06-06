@@ -1,0 +1,7 @@
+when: |
+  tool == "Bash"
+  && input.commands.exists(c, c.name.startsWith("python"))
+  && facts.has_pyproject
+  && !("bare-python" in session.signals)
+action: deny
+message: "Use `uv run python` instead of bare python. Run: ward allow bare-python"

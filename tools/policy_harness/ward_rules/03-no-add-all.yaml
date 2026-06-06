@@ -6,4 +6,4 @@ when: |
        && c.git_args.exists(a, a in [".", "-A", "--all"])
      )
 action: deny
-message: "Add specific files by name."
+message: "Bulk staging is forbidden."

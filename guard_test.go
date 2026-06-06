@@ -659,6 +659,58 @@ func TestGitCommitMessageNoFalsePositive(t *testing.T) {
 	}
 }
 
+// --- Structured python-rule tests (no-python-c / no-bare-python) ---
+// These lock in the conversion from "^python" Full-regex matching to structured
+// c.name/c.args matching, including the parser's path/wrapper normalization.
+
+func TestPythonCViaPathDeny(t *testing.T) {
+	// no-python-c must see through an absolute interpreter path.
+	guard := loadTestGuard(t)
+	state := NewState("implementing")
+	event := bashEvent(t, `/usr/bin/python3 -c "import sys"`)
+
+	result, _, err := Evaluate(guard, state, event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result == nil || result.Action != "deny" {
+		t.Errorf("python -c via absolute path should deny, got: %v", result)
+	}
+}
+
+func TestBarePythonWithPyprojectDeny(t *testing.T) {
+	// no-bare-python (testdata has_pyproject fact = echo true) must fire for a
+	// bare interpreter, including the REPL form with no arguments.
+	guard := loadTestGuard(t)
+	state := NewState("implementing")
+	for _, cmd := range []string{"python app.py", "python", "python3 app.py"} {
+		event := bashEvent(t, cmd)
+		result, _, err := Evaluate(guard, state, event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result == nil || result.Action != "deny" {
+			t.Errorf("bare python %q with pyproject should deny, got: %v", cmd, result)
+		}
+	}
+}
+
+func TestUvRunPythonAllowed(t *testing.T) {
+	// "uv run python" is the recommended form; the command name is uv, not
+	// python, so neither python rule should fire.
+	guard := loadTestGuard(t)
+	state := NewState("implementing")
+	event := bashEvent(t, "uv run python app.py")
+
+	result, _, err := Evaluate(guard, state, event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != nil && result.Action == "deny" {
+		t.Errorf("uv run python should not deny, got: %s", result.Message)
+	}
+}
+
 // --- Phase-gating tests ---
 
 func TestPhaseGatingBasic(t *testing.T) {
@@ -1143,7 +1195,7 @@ message: env rule loaded
 
 	t.Setenv("WARD_RULES_PATH", dir)
 
-	guard, err := loadGuard()
+	guard, err := loadGuard(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,0 +1,9 @@
+name: windows
+version: 0.1.0
+description: Windows-specific safety restrictions.
+exports:
+  capabilities:
+    - windows-safety
+blocks:
+  operations:
+    - tskill

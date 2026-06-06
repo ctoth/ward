@@ -1,0 +1,23 @@
+name: git-discipline
+version: 0.1.0
+description: Repo-state-aware git ownership and restore discipline.
+requires:
+  - core-safety
+exports:
+  capabilities:
+    - git-path-ownership
+    - explicit-adoption
+    - explicit-discard
+blocks:
+  operations:
+    - dirty-tree-switch
+    - contaminated-commit
+    - restore-unowned-path
+    - restore-directory
+tests:
+  suites:
+    - examples
+    - hypothesis
+  compose_with:
+    - core-safety
+    - python

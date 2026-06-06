@@ -1,0 +1,10 @@
+# Build artifacts
+*.exe
+*.log
+
+# Python policy harness: virtualenv and caches
+tools/policy_harness/.venv/
+**/__pycache__/
+**/.pytest_cache/
+**/.hypothesis/
+.ruff_cache/

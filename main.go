@@ -43,6 +43,18 @@ func main() {
 			os.Exit(0)
 		}
 		cmdAllow()
+	case "adopt":
+		if hasHelpFlag(os.Args[2:]) {
+			fmt.Fprintln(os.Stderr, helpAdopt)
+			os.Exit(0)
+		}
+		cmdGrantPaths("adopt")
+	case "discard":
+		if hasHelpFlag(os.Args[2:]) {
+			fmt.Fprintln(os.Stderr, helpDiscard)
+			os.Exit(0)
+		}
+		cmdGrantPaths("discard")
 	case "revoke":
 		if hasHelpFlag(os.Args[2:]) {
 			fmt.Fprintln(os.Stderr, helpRevoke)
@@ -67,6 +79,48 @@ func main() {
 			os.Exit(0)
 		}
 		cmdInstall()
+	case "install-defaults":
+		if hasHelpFlag(os.Args[2:]) {
+			fmt.Fprintln(os.Stderr, helpInstallDefaults)
+			os.Exit(0)
+		}
+		cmdInstallDefaults()
+	case "install-profile":
+		if hasHelpFlag(os.Args[2:]) {
+			fmt.Fprintln(os.Stderr, helpInstallProfile)
+			os.Exit(0)
+		}
+		cmdInstallProfile()
+	case "update-profile":
+		if hasHelpFlag(os.Args[2:]) {
+			fmt.Fprintln(os.Stderr, helpUpdateProfile)
+			os.Exit(0)
+		}
+		cmdUpdateProfile()
+	case "remove-profile":
+		if hasHelpFlag(os.Args[2:]) {
+			fmt.Fprintln(os.Stderr, helpRemoveProfile)
+			os.Exit(0)
+		}
+		cmdRemoveProfile()
+	case "list-profiles":
+		if hasHelpFlag(os.Args[2:]) {
+			fmt.Fprintln(os.Stderr, helpListProfiles)
+			os.Exit(0)
+		}
+		cmdListProfiles()
+	case "resolve-config":
+		if hasHelpFlag(os.Args[2:]) {
+			fmt.Fprintln(os.Stderr, helpResolveConfig)
+			os.Exit(0)
+		}
+		cmdResolveConfig()
+	case "validate-profile":
+		if hasHelpFlag(os.Args[2:]) {
+			fmt.Fprintln(os.Stderr, helpValidateProfile)
+			os.Exit(0)
+		}
+		cmdValidateProfile()
 	case "uninstall":
 		if hasHelpFlag(os.Args[2:]) {
 			fmt.Fprintln(os.Stderr, helpUninstall)
@@ -105,26 +159,35 @@ Commands:
   eval          Evaluate a tool call event from stdin
   set           Set the session phase
   allow         Add a one-time override signal
+  adopt         Grant commit authority for exact repo-relative paths
+  discard       Grant discard authority for exact repo-relative paths
   revoke        Remove an override signal
   end-session   Clean up session registry (SessionEnd hook)
   install       Register ward hooks in Claude Code settings
+  install-defaults Install built-in default profiles
+  install-profile  Install a profile from a local path or git source
+  update-profile   Reinstall an installed profile from its recorded source
+  remove-profile   Remove an installed profile
+  list-profiles    List installed profiles
+  resolve-config   Export the effective loaded ruleset/config
+  validate-profile Validate a profile bundle without installing it
   uninstall     Remove ward hooks from Claude Code settings
   validate      Validate all rule and fact files
 
 Configuration:
-  ~/.ward/facts/*.yaml   Global facts (shell commands evaluated on demand)
-  .ward/facts/*.yaml     Project facts (override global)
-  ~/.ward/rules/*.yaml   Global rules
-  .ward/rules/*.yaml     Project rules
+  ~/.ward/profiles/*     Installed profile bundles
+  .ward/facts/*.yaml     Project-local fact overlays
+  .ward/rules/*.yaml     Project-local rule overlays
+  .ward/signals/*.yaml   Project-local signal overlays
 
 Environment:
-  WARD_RULES_PATH   Additional rule directories (PATH-separated).
-                    Loaded between global and project rules.
-  WARD_FACTS_PATH   Additional fact directories (PATH-separated).
-                    Loaded between global and project facts.
+  WARD_RULES_PATH   Additional rule directories (PATH-separated), loaded
+                    after installed profiles and before project overlays.
+  WARD_FACTS_PATH   Additional fact directories (PATH-separated), loaded
+                    after installed profiles and before project overlays.
   WARD_SESSION      Session ID for phase tracking.
-  WARD_SIGNALS_PATH Additional signal definition directories (PATH-separated).
-                    Loaded between global and project signal definitions.
+  WARD_SIGNALS_PATH Additional signal directories (PATH-separated), loaded
+                    after installed profiles and before project overlays.
 
 Run 'ward <command> --help' for details on a command.`
 
@@ -158,16 +221,10 @@ The session ID can also be provided via the WARD_SESSION env var.
 Example:
   ward set implementing --session abc`
 
-const helpValidate = `ward validate - validate rule and fact files
+const helpValidate = `ward validate - validate the effective installed config
 
-Scans rule files in global (~/.ward/rules/), WARD_RULES_PATH directories, and
-project (.ward/rules/) directories, compiles each CEL expression, and reports
-errors. Also validates fact files from ~/.ward/facts/, WARD_FACTS_PATH, and
-.ward/facts/.
-
-Priority: project-local rules are evaluated last. Deny-is-veto means the first
-deny wins. For facts, project values override env-path values which override
-global values.
+Validates installed profiles plus env/project overlays, compiles each CEL rule,
+and reports manifest/load/compile errors for the effective configuration.
 
 Usage:
   ward validate`
@@ -190,6 +247,51 @@ Preserves all other hooks (claudio, etc).
 
 Usage:
   ward install`
+
+const helpInstallDefaults = `ward install-defaults - install built-in profile bundles
+
+Usage:
+  ward install-defaults --profile <name>[,<name>...] [--all]
+
+Built-in profiles:
+  core-safety
+  git-discipline
+  python
+  windows`
+
+const helpInstallProfile = `ward install-profile - install a profile from a path or git source
+
+Usage:
+  ward install-profile <source> [--ref <git-ref>] [--subdir <path>]
+
+Examples:
+  ward install-profile ./profiles/git-discipline
+  ward install-profile https://github.com/example/ward-profiles.git --ref v1.2.0 --subdir profiles/git-discipline`
+
+const helpUpdateProfile = `ward update-profile - reinstall an installed profile from its recorded source
+
+Usage:
+  ward update-profile <name>`
+
+const helpRemoveProfile = `ward remove-profile - remove an installed profile
+
+Usage:
+  ward remove-profile <name>`
+
+const helpListProfiles = `ward list-profiles - list installed profiles
+
+Usage:
+  ward list-profiles [--json]`
+
+const helpResolveConfig = `ward resolve-config - export the effective loaded ruleset
+
+Usage:
+  ward resolve-config --json`
+
+const helpValidateProfile = `ward validate-profile - validate a profile bundle without installing it
+
+Usage:
+  ward validate-profile <path> [--subdir <path>]`
 
 const helpUninstall = `ward uninstall - remove ward hooks from Claude Code settings
 
@@ -220,6 +322,29 @@ Signal definitions are loaded from:
 Example:
   ward allow force-push --session abc`
 
+const helpAdopt = `ward adopt - explicitly include pre-existing paths in commit scope
+
+Usage:
+  ward adopt <path> [<path> ...] [--session ID]
+
+Adds exact repo-relative file paths to session.adopted_paths. Adoption widens
+commit authority only; it does NOT allow discard/reset/restore of those paths.
+
+Example:
+  ward adopt src/foo.py docs/spec.md --session abc`
+
+const helpDiscard = `ward discard - explicitly allow discarding exact paths
+
+Usage:
+  ward discard <path> [<path> ...] [--session ID]
+
+Adds exact repo-relative file paths to session.discardable_paths. This is
+separate from adoption: a path may be adopted for commit without being
+discardable.
+
+Example:
+  ward discard src/foo.py --session abc`
+
 const helpRevoke = `ward revoke - remove an override signal
 
 Usage:
@@ -249,15 +374,15 @@ func cmdEval() {
 		os.Exit(1)
 	}
 
-	guard, err := loadGuard()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "ward: load config: %v\n", err)
-		os.Exit(1)
-	}
-
 	event, agent, err := DetectAndParse(input)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ward: parse input: %v\n", err)
+		os.Exit(1)
+	}
+
+	guard, err := loadGuard(event.CWD)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ward: load config: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -274,6 +399,9 @@ func cmdEval() {
 		state = NewState(DefaultPhase)
 	}
 
+	if repoStatus, repoErr := ComputeRepoStatus(event.CWD); repoErr == nil {
+		state.SyncRepo(repoStatus)
+	}
 	state.Update(event.Tool, event.Input)
 
 	var verboseWriter io.Writer
@@ -329,21 +457,10 @@ func cmdAllow() {
 	// Default to one-time use unless a signal definition says otherwise.
 	oneTime := true
 
-	// Check signal definition directories for overrides.
-	home, _ := os.UserHomeDir()
-	searchDirs := []string{filepath.Join(home, ".ward", "signals")}
-	for _, dir := range envPathDirs(envSignalsPath) {
-		searchDirs = append(searchDirs, dir)
-	}
 	cwd, _ := os.Getwd()
-	searchDirs = append(searchDirs, filepath.Join(cwd, ".ward", "signals"))
-
-	for _, dir := range searchDirs {
-		defs, _ := LoadSignalDefsFromDir(dir)
-		if def, ok := defs[name]; ok {
-			if def.OneTimeUse != nil {
-				oneTime = *def.OneTimeUse
-			}
+	if config, err := resolveConfig(cwd); err == nil {
+		if def, ok := config.signalDefs[name]; ok && def.OneTimeUse != nil {
+			oneTime = *def.OneTimeUse
 		}
 	}
 
@@ -354,6 +471,64 @@ func cmdAllow() {
 		os.Exit(1)
 	}
 	fmt.Fprintf(os.Stderr, "ward: signal %q activated\n", name)
+}
+
+func cmdGrantPaths(kind string) {
+	if len(os.Args) < 3 {
+		fmt.Fprintf(os.Stderr, "usage: ward %s <path> [<path> ...] [--session ID]\n", kind)
+		os.Exit(1)
+	}
+
+	sessionID := sessionFromArgs()
+	rawPaths := pathArgsFromCLI(os.Args[2:])
+	if len(rawPaths) == 0 {
+		fmt.Fprintf(os.Stderr, "ward: no paths supplied for %s\n", kind)
+		os.Exit(1)
+	}
+
+	state, err := LoadState(sessionID)
+	if err != nil {
+		state = NewState("")
+	}
+
+	cwd, _ := os.Getwd()
+	repoStatus, err := ComputeRepoStatus(cwd)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ward: resolve repo for %s: %v\n", kind, err)
+		os.Exit(1)
+	}
+	if repoStatus == nil || !repoStatus.InGit {
+		fmt.Fprintf(os.Stderr, "ward: %s requires running inside a git repo\n", kind)
+		os.Exit(1)
+	}
+	state.SyncRepo(repoStatus)
+
+	normalized := make([]string, 0, len(rawPaths))
+	for _, rawPath := range rawPaths {
+		path, err := normalizeGrantPath(repoStatus.Root, cwd, rawPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ward: %s path %q: %v\n", kind, rawPath, err)
+			os.Exit(1)
+		}
+		normalized = append(normalized, path)
+	}
+
+	switch kind {
+	case "adopt":
+		state.AdoptedPaths = uniquePaths(append(state.AdoptedPaths, normalized...))
+	case "discard":
+		state.DiscardablePaths = uniquePaths(append(state.DiscardablePaths, normalized...))
+	default:
+		fmt.Fprintf(os.Stderr, "ward: unknown grant kind %q\n", kind)
+		os.Exit(1)
+	}
+
+	if err := SaveState(sessionID, state); err != nil {
+		fmt.Fprintf(os.Stderr, "ward: save state: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Fprintf(os.Stderr, "ward: %s granted for %s\n", kind, strings.Join(normalized, ", "))
 }
 
 func cmdRevoke() {
@@ -426,112 +601,35 @@ func cmdSet() {
 	fmt.Fprintf(os.Stderr, "ward: phase → %s\n", phase)
 }
 
-// labeledDir pairs a directory path with a label for validate output.
-type labeledDir struct {
-	path  string
-	label string
-}
-
 func cmdValidate() {
-	globalRulesDir, projectRulesDir := ruleDirs()
-	globalFactsDir, projectFactsDir := factsDirs()
-
-	// Build labeled directory lists
-	ruleDirList := []labeledDir{
-		{globalRulesDir, "global"},
+	config, err := resolveConfig(mustGetwd())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ward: validate: %v\n", err)
+		os.Exit(1)
 	}
-	for _, dir := range envPathDirs(envRulesPath) {
-		ruleDirList = append(ruleDirList, labeledDir{dir, "WARD_RULES_PATH"})
-	}
-	ruleDirList = append(ruleDirList, labeledDir{projectRulesDir, "project"})
-
-	factsDirList := []labeledDir{
-		{globalFactsDir, "global"},
-	}
-	for _, dir := range envPathDirs(envFactsPath) {
-		factsDirList = append(factsDirList, labeledDir{dir, "WARD_FACTS_PATH"})
-	}
-	factsDirList = append(factsDirList, labeledDir{projectFactsDir, "project"})
-
-	totalFiles := 0
 	totalErrors := 0
-
-	// Validate rules
-	fmt.Fprintf(os.Stderr, "Rules:\n")
-	for _, ld := range ruleDirList {
-		entries, err := os.ReadDir(ld.path)
-		if err != nil {
-			if os.IsNotExist(err) {
-				fmt.Fprintf(os.Stderr, "  %s (%s, not found, skipping)\n", ld.path, ld.label)
-				continue
-			}
-			fmt.Fprintf(os.Stderr, "  %s: %v\n", ld.path, err)
+	fmt.Fprintf(os.Stderr, "Profiles:\n")
+	for _, profile := range config.Profiles {
+		fmt.Fprintf(os.Stderr, "  %s  [%s]\n", profile.Name, profile.Source)
+	}
+	fmt.Fprintf(os.Stderr, "\nRules:\n")
+	for _, rule := range config.guardRules {
+		if err := CompileRule(&rule); err != nil {
+			fmt.Fprintf(os.Stderr, "  FAIL  %s: %v\n", rule.filename, err)
 			totalErrors++
 			continue
 		}
-
-		fmt.Fprintf(os.Stderr, "  %s (%s)\n", ld.path, ld.label)
-		for _, entry := range entries {
-			if entry.IsDir() {
-				continue
-			}
-			name := entry.Name()
-			if !isYAML(name) {
-				continue
-			}
-			totalFiles++
-			path := filepath.Join(ld.path, name)
-			r, err := LoadRule(path)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "    FAIL  %s: %v\n", name, err)
-				totalErrors++
-				continue
-			}
-			if err := CompileRule(r); err != nil {
-				fmt.Fprintf(os.Stderr, "    FAIL  %s: CEL error: %v\n", name, err)
-				totalErrors++
-				continue
-			}
-			fmt.Fprintf(os.Stderr, "    OK    %s  [%s]\n", name, r.Action)
-		}
+		fmt.Fprintf(os.Stderr, "  OK    %s  [%s]\n", rule.filename, rule.Action)
 	}
-
-	// Validate facts
 	fmt.Fprintf(os.Stderr, "\nFacts:\n")
-	for _, ld := range factsDirList {
-		entries, err := os.ReadDir(ld.path)
-		if err != nil {
-			if os.IsNotExist(err) {
-				fmt.Fprintf(os.Stderr, "  %s (%s, not found, skipping)\n", ld.path, ld.label)
-				continue
-			}
-			fmt.Fprintf(os.Stderr, "  %s: %v\n", ld.path, err)
-			totalErrors++
-			continue
-		}
-
-		fmt.Fprintf(os.Stderr, "  %s (%s)\n", ld.path, ld.label)
-		for _, entry := range entries {
-			if entry.IsDir() {
-				continue
-			}
-			name := entry.Name()
-			if !isYAML(name) {
-				continue
-			}
-			totalFiles++
-			path := filepath.Join(ld.path, name)
-			factName, _, err := LoadFact(path)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "    FAIL  %s: %v\n", name, err)
-				totalErrors++
-				continue
-			}
-			fmt.Fprintf(os.Stderr, "    OK    %s  [%s]\n", name, factName)
-		}
+	for _, fact := range config.Facts {
+		fmt.Fprintf(os.Stderr, "  OK    %s  [%s]\n", fact.Source, fact.Name)
 	}
-
-	fmt.Fprintf(os.Stderr, "\n%d files scanned, %d errors\n", totalFiles, totalErrors)
+	fmt.Fprintf(os.Stderr, "\nSignals:\n")
+	for _, signal := range config.Signals {
+		fmt.Fprintf(os.Stderr, "  OK    %s  [%s]\n", signal.Source, signal.Name)
+	}
+	fmt.Fprintf(os.Stderr, "\n%d rules, %d facts, %d signals, %d errors\n", len(config.guardRules), len(config.Facts), len(config.Signals), totalErrors)
 	if totalErrors > 0 {
 		os.Exit(1)
 	}
@@ -539,6 +637,59 @@ func cmdValidate() {
 
 func isYAML(name string) bool {
 	return filepath.Ext(name) == ".yaml" || filepath.Ext(name) == ".yml"
+}
+
+func pathArgsFromCLI(args []string) []string {
+	paths := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--session" {
+			i++
+			continue
+		}
+		if strings.HasPrefix(arg, "--session=") {
+			continue
+		}
+		if strings.HasPrefix(arg, "-") {
+			continue
+		}
+		paths = append(paths, arg)
+	}
+	return paths
+}
+
+func normalizeGrantPath(repoRoot, cwd, rawPath string) (string, error) {
+	if rawPath == "" {
+		return "", fmt.Errorf("empty path")
+	}
+
+	path := rawPath
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(cwd, path)
+	}
+
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+
+	repoRootAbs, err := filepath.Abs(filepath.FromSlash(repoRoot))
+	if err != nil {
+		return "", err
+	}
+
+	rel, err := filepath.Rel(repoRootAbs, absPath)
+	if err != nil {
+		return "", err
+	}
+	rel = NormalizePath(rel)
+	if rel == "." || strings.HasPrefix(rel, "../") {
+		return "", fmt.Errorf("must stay within repo root")
+	}
+	if strings.HasSuffix(rel, "/") || strings.Contains(rel, "*") {
+		return "", fmt.Errorf("must be an exact file path")
+	}
+	return rel, nil
 }
 
 func sessionFromArgs() string {
@@ -565,56 +716,12 @@ func sessionFromArgs() string {
 }
 
 // loadGuard discovers facts and rules from standard locations, compiles them.
-func loadGuard() (*Guard, error) {
-	globalRulesDir, projectRulesDir := ruleDirs()
-	globalFactsDir, projectFactsDir := factsDirs()
-
-	// Load rules: global → WARD_RULES_PATH → project
-	globalRules, err := LoadRulesFromDir(globalRulesDir)
+func loadGuard(cwd string) (*Guard, error) {
+	config, err := resolveConfig(cwd)
 	if err != nil {
-		return nil, fmt.Errorf("global rules: %w", err)
+		return nil, err
 	}
-	allRules := globalRules
-
-	for _, dir := range envPathDirs(envRulesPath) {
-		extra, err := LoadRulesFromDir(dir)
-		if err != nil {
-			return nil, fmt.Errorf("WARD_RULES_PATH rules (%s): %w", dir, err)
-		}
-		allRules = append(allRules, extra...)
-	}
-
-	projectRules, err := LoadRulesFromDir(projectRulesDir)
-	if err != nil {
-		return nil, fmt.Errorf("project rules: %w", err)
-	}
-	allRules = append(allRules, projectRules...)
-
-	// Load facts: global → WARD_FACTS_PATH → project
-	globalFacts, err := LoadFactsFromDir(globalFactsDir)
-	if err != nil {
-		return nil, fmt.Errorf("global facts: %w", err)
-	}
-	allFacts := globalFacts
-	if allFacts == nil {
-		allFacts = make(map[string]Fact)
-	}
-
-	for _, dir := range envPathDirs(envFactsPath) {
-		extra, err := LoadFactsFromDir(dir)
-		if err != nil {
-			return nil, fmt.Errorf("WARD_FACTS_PATH facts (%s): %w", dir, err)
-		}
-		allFacts = MergeFacts(allFacts, extra)
-	}
-
-	projectFacts, err := LoadFactsFromDir(projectFactsDir)
-	if err != nil {
-		return nil, fmt.Errorf("project facts: %w", err)
-	}
-	allFacts = MergeFacts(allFacts, projectFacts)
-
-	return NewGuard(allFacts, allRules)
+	return NewGuard(config.guardFacts, config.guardRules)
 }
 
 // envPathDirs splits an environment variable by os.PathListSeparator
@@ -633,18 +740,4 @@ func envPathDirs(envVar string) []string {
 		}
 	}
 	return dirs
-}
-
-// ruleDirs returns (global, project) rule directories.
-func ruleDirs() (string, string) {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".ward", "rules"),
-		filepath.Join(".ward", "rules")
-}
-
-// factsDirs returns (global, project) facts directories.
-func factsDirs() (string, string) {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".ward", "facts"),
-		filepath.Join(".ward", "facts")
 }

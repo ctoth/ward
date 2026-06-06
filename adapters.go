@@ -216,7 +216,7 @@ func formatClaude(r *Result) map[string]any {
 	case "deny":
 		return map[string]any{
 			"hookSpecificOutput": map[string]any{
-				"hookEventName":           "PreToolUse",
+				"hookEventName":            "PreToolUse",
 				"permissionDecision":       "deny",
 				"permissionDecisionReason": r.Message,
 			},
@@ -224,7 +224,7 @@ func formatClaude(r *Result) map[string]any {
 	case "context":
 		return map[string]any{
 			"hookSpecificOutput": map[string]any{
-				"hookEventName":    "PreToolUse",
+				"hookEventName":     "PreToolUse",
 				"additionalContext": r.Message,
 			},
 		}
@@ -318,15 +318,32 @@ func parseArgvCommand(parts []string) []ParsedCommand {
 	if len(parts) > 1 {
 		cmd.Args = append([]string(nil), parts[1:]...)
 	}
-	return []ParsedCommand{cmd}
+	return []ParsedCommand{annotateParsedCommand(cmd)}
 }
 
 func parsedCommandMaps(parsed []ParsedCommand) []any {
 	commands := make([]any, len(parsed))
 	for i, p := range parsed {
+		args := make([]any, len(p.Args))
+		for j, arg := range p.Args {
+			args[j] = arg
+		}
+		gitArgs := make([]any, len(p.GitArgs))
+		for j, arg := range p.GitArgs {
+			gitArgs[j] = arg
+		}
+		gitPaths := make([]any, len(p.GitPaths))
+		for j, path := range p.GitPaths {
+			gitPaths[j] = path
+		}
 		commands[i] = map[string]any{
-			"name": p.Name,
-			"full": p.Full,
+			"name":           p.Name,
+			"full":           p.Full,
+			"args":           args,
+			"git_subcommand": p.GitSubcommand,
+			"git_args":       gitArgs,
+			"git_category":   p.GitCategory,
+			"git_paths":      gitPaths,
 		}
 	}
 	return commands

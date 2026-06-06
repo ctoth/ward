@@ -1,0 +1,17 @@
+name: core-safety
+version: 0.1.0
+description: Core safety defaults for destructive shell and git operations.
+exports:
+  capabilities:
+    - core-safety
+blocks:
+  operations:
+    - git-reset-hard
+    - git-stash
+    - bulk-stage
+    - force-push
+    - force-tag
+    - github-raw-fetch
+tests:
+  suites:
+    - examples

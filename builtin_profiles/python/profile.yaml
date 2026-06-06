@@ -1,0 +1,13 @@
+name: python
+version: 0.1.0
+description: Python execution discipline for uv-based workflows.
+exports:
+  capabilities:
+    - python-discipline
+blocks:
+  operations:
+    - inline-python
+    - bare-python
+tests:
+  suites:
+    - examples

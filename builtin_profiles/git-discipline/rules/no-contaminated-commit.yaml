@@ -1,0 +1,7 @@
+when: |
+  tool == "Bash"
+  && repo.in_git
+  && input.commands.exists(c, c.name == "git" && c.git_subcommand == "commit")
+  && repo.staged_paths.exists(p, !(p in session.session_owned_paths || p in session.adopted_paths))
+action: deny
+message: "Commit staging contains paths outside the owned/adopted scope."

@@ -1,0 +1,2 @@
+command: "test -f pyproject.toml && echo true || echo false"
+type: bool

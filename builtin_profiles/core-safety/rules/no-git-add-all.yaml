@@ -5,5 +5,6 @@ when: |
        && c.git_subcommand == "add"
        && c.git_args.exists(a, a in [".", "-A", "--all"])
      )
+  && !("git-add-all" in session.signals)
 action: deny
-message: "Add specific files by name."
+message: "Bulk staging is forbidden. Run: ward allow git-add-all"

@@ -6,5 +6,6 @@ when: |
             a.startsWith("-") && !a.startsWith("--") && a.contains("c")
           )
      )
+  && !("python-c" in session.signals)
 action: deny
-message: "Write a .py file, then run it."
+message: "Write a .py file, then run it. Run: ward allow python-c"

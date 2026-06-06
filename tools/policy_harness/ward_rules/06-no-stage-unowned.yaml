@@ -1,0 +1,13 @@
+when: |
+  tool == "Bash"
+  && repo.in_git
+  && input.commands.exists(c,
+       c.name == "git"
+       && c.git_subcommand == "add"
+       && c.git_paths.exists(p,
+            !(p in session.touched_files || p in session.adopted_paths)
+            || (p in session.baseline_dirty_paths && !(p in session.adopted_paths))
+          )
+     )
+action: deny
+message: "Only touched or explicitly adopted paths may be staged."

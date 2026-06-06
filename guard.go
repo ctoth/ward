@@ -166,6 +166,7 @@ func celEnvOptions() []cel.EnvOption {
 		cel.Variable("input", cel.MapType(cel.StringType, cel.DynType)),
 		cel.Variable("session", cel.MapType(cel.StringType, cel.DynType)),
 		cel.Variable("facts", cel.MapType(cel.StringType, cel.DynType)),
+		cel.Variable("repo", cel.MapType(cel.StringType, cel.DynType)),
 
 		// last(list, n) — returns the last N elements of a list
 		cel.Function("last",
@@ -275,10 +276,16 @@ type Signal struct {
 }
 
 type State struct {
-	Phase     string            `json:"phase"`
-	History   []string          `json:"history"`
-	Signals   map[string]Signal `json:"signals"`
-	StartedAt time.Time         `json:"started_at"`
+	Phase              string            `json:"phase"`
+	History            []string          `json:"history"`
+	Signals            map[string]Signal `json:"signals"`
+	StartedAt          time.Time         `json:"started_at"`
+	RepoRoot           string            `json:"repo_root,omitempty"`
+	BaselineDirtyPaths []string          `json:"baseline_dirty_paths,omitempty"`
+	TouchedFiles       []string          `json:"touched_files,omitempty"`
+	TouchedSinceCommit []string          `json:"touched_since_commit,omitempty"`
+	AdoptedPaths       []string          `json:"adopted_paths,omitempty"`
+	DiscardablePaths   []string          `json:"discardable_paths,omitempty"`
 }
 
 func NewState(phase string) *State {
@@ -286,21 +293,52 @@ func NewState(phase string) *State {
 		phase = DefaultPhase
 	}
 	return &State{
-		Phase:     phase,
-		History:   []string{},
-		Signals:   make(map[string]Signal),
-		StartedAt: time.Now(),
+		Phase:              phase,
+		History:            []string{},
+		Signals:            make(map[string]Signal),
+		StartedAt:          time.Now(),
+		BaselineDirtyPaths: []string{},
+		TouchedFiles:       []string{},
+		TouchedSinceCommit: []string{},
+		AdoptedPaths:       []string{},
+		DiscardablePaths:   []string{},
 	}
 }
 
 func (s *State) Update(tool string, input map[string]any) {
 	toolName := canonicalToolName(tool)
 
+	if toolName == "Edit" || toolName == "Write" {
+		if filePath, ok := input["file_path"].(string); ok && filePath != "" {
+			filePath = s.normalizeTrackedPath(filePath)
+			s.TouchedFiles = appendUniquePath(s.TouchedFiles, filePath)
+			s.TouchedSinceCommit = appendUniquePath(s.TouchedSinceCommit, filePath)
+		}
+	}
+
 	// Detect git commit from parsed commands rather than raw substrings.
 	if toolName == "Bash" && hasGitCommit(input) {
+		s.TouchedSinceCommit = nil
 		s.appendHistory("_commit")
 	}
 	s.appendHistory(toolName)
+}
+
+func (s *State) SyncRepo(status *RepoStatus) {
+	if status == nil || !status.InGit {
+		return
+	}
+	root := NormalizePath(status.Root)
+	if s.RepoRoot == "" || s.RepoRoot != root {
+		s.RepoRoot = root
+		s.BaselineDirtyPaths = uniquePaths(status.DirtyPaths)
+		s.TouchedFiles = nil
+		s.TouchedSinceCommit = nil
+		return
+	}
+	if s.BaselineDirtyPaths == nil {
+		s.BaselineDirtyPaths = []string{}
+	}
 }
 
 func (s *State) appendHistory(entry string) {
@@ -322,12 +360,30 @@ func (s *State) ToMap() map[string]any {
 		signals = append(signals, name)
 	}
 
+	touchedFiles := stringListToAny(s.TouchedFiles)
+	touchedSinceCommit := stringListToAny(s.TouchedSinceCommit)
+	baselineDirtyPaths := stringListToAny(s.BaselineDirtyPaths)
+	adoptedPaths := stringListToAny(s.AdoptedPaths)
+	discardablePaths := stringListToAny(s.DiscardablePaths)
+	sessionOwnedPaths := stringListToAny(pathDifference(s.TouchedFiles, s.BaselineDirtyPaths))
+
 	return map[string]any{
-		"phase":      s.Phase,
-		"history":    history,
-		"tool_count": int64(len(s.History)),
-		"started_at": s.StartedAt.Format(time.RFC3339),
-		"signals":    signals,
+		"phase":                      s.Phase,
+		"history":                    history,
+		"tool_count":                 int64(len(s.History)),
+		"started_at":                 s.StartedAt.Format(time.RFC3339),
+		"signals":                    signals,
+		"repo_root":                  s.RepoRoot,
+		"baseline_dirty_paths":       baselineDirtyPaths,
+		"baseline_dirty_count":       int64(len(s.BaselineDirtyPaths)),
+		"has_preexisting_dirty":      len(s.BaselineDirtyPaths) > 0,
+		"adopted_paths":              adoptedPaths,
+		"discardable_paths":          discardablePaths,
+		"session_owned_paths":        sessionOwnedPaths,
+		"touched_files":              touchedFiles,
+		"touched_file_count":         int64(len(s.TouchedFiles)),
+		"touched_since_commit":       touchedSinceCommit,
+		"touched_since_commit_count": int64(len(s.TouchedSinceCommit)),
 	}
 }
 
@@ -433,6 +489,21 @@ func LoadState(sessionID string) (*State, error) {
 	if s.Signals == nil {
 		s.Signals = make(map[string]Signal)
 	}
+	if s.BaselineDirtyPaths == nil {
+		s.BaselineDirtyPaths = []string{}
+	}
+	if s.TouchedFiles == nil {
+		s.TouchedFiles = []string{}
+	}
+	if s.TouchedSinceCommit == nil {
+		s.TouchedSinceCommit = []string{}
+	}
+	if s.AdoptedPaths == nil {
+		s.AdoptedPaths = []string{}
+	}
+	if s.DiscardablePaths == nil {
+		s.DiscardablePaths = []string{}
+	}
 	return &s, nil
 }
 
@@ -466,6 +537,43 @@ func NormalizeInput(input map[string]any) map[string]any {
 	return normalized
 }
 
+func appendUniquePath(paths []string, path string) []string {
+	path = NormalizePath(path)
+	for _, existing := range paths {
+		if existing == path {
+			return paths
+		}
+	}
+	return append(paths, path)
+}
+
+func (s *State) normalizeTrackedPath(path string) string {
+	path = NormalizePath(path)
+	if s.RepoRoot == "" {
+		return path
+	}
+	rel, err := filepath.Rel(filepath.FromSlash(s.RepoRoot), filepath.FromSlash(path))
+	if err != nil {
+		return path
+	}
+	rel = NormalizePath(rel)
+	if rel == "." || strings.HasPrefix(rel, "../") {
+		return path
+	}
+	return rel
+}
+
+func stringListToAny(items []string) []any {
+	if len(items) == 0 {
+		return []any{}
+	}
+	out := make([]any, len(items))
+	for i, item := range items {
+		out[i] = item
+	}
+	return out
+}
+
 func isPathField(name string) bool {
 	switch name {
 	case "file_path", "path", "directory", "cwd":
@@ -483,6 +591,7 @@ type Result struct {
 }
 
 var factsRefRe = regexp.MustCompile(`facts\.(\w+)`)
+
 // signalRefRe matches both session.signals.contains("x") and "x" in session.signals
 var signalRefRe = regexp.MustCompile(`(?:session\.signals\.contains\("([^"]+)"\)|"([^"]+)"\s+in\s+session\.signals)`)
 
@@ -507,6 +616,7 @@ func EvaluateVerbose(guard *Guard, state *State, event ToolEvent, verbose io.Wri
 
 	// Normalize input paths
 	normalizedInput := NormalizeInput(event.Input)
+	enrichCommandRepoContext(normalizedInput, event.CWD)
 
 	// Determine which facts are referenced by any rule
 	neededFacts := make(map[string]bool)
@@ -542,6 +652,7 @@ func EvaluateVerbose(guard *Guard, state *State, event ToolEvent, verbose io.Wri
 		"input":   normalizedInput,
 		"session": sessionMap,
 		"facts":   factsMap,
+		"repo":    repoActivation(event.CWD, state, verbose),
 	}
 
 	// Collect all matching results: deny-is-veto, context accumulates
@@ -646,6 +757,98 @@ func EvaluateVerbose(guard *Guard, state *State, event ToolEvent, verbose io.Wri
 		fmt.Fprintf(verbose, "ward: DECISION: allow (no rules matched)\n")
 	}
 	return nil, matchedSignals, nil // no rule matched — allow
+}
+
+func repoActivation(cwd string, state *State, verbose io.Writer) map[string]any {
+	status, err := ComputeRepoStatus(cwd)
+	if err != nil {
+		if verbose != nil {
+			fmt.Fprintf(verbose, "ward:   repo status: error: %v\n", err)
+		}
+		return map[string]any{
+			"in_git": false,
+			"clean":  true,
+		}
+	}
+
+	if status == nil {
+		return map[string]any{
+			"in_git": false,
+			"clean":  true,
+		}
+	}
+
+	preexistingDirty := pathIntersection(status.DirtyPaths, state.BaselineDirtyPaths)
+	preexistingStaged := pathIntersection(status.StagedPaths, state.BaselineDirtyPaths)
+	touchedDirty := pathIntersection(status.DirtyPaths, state.TouchedFiles)
+	stagedTouched := pathIntersection(status.StagedPaths, state.TouchedSinceCommit)
+	nonTouchedStaged := pathDifference(status.StagedPaths, state.TouchedSinceCommit)
+
+	if verbose != nil && status.InGit {
+		fmt.Fprintf(verbose, "ward:   repo branch=%s clean=%t staged=%d unstaged=%d untracked=%d\n",
+			status.Branch, status.Clean, len(status.StagedPaths), len(status.UnstagedPaths), len(status.UntrackedPaths))
+	}
+
+	return map[string]any{
+		"in_git":                   status.InGit,
+		"root":                     status.Root,
+		"branch":                   status.Branch,
+		"clean":                    status.Clean,
+		"has_staged":               status.HasStaged,
+		"has_unstaged":             status.HasUnstaged,
+		"has_untracked":            status.HasUntracked,
+		"dirty_paths":              stringListToAny(status.DirtyPaths),
+		"staged_paths":             stringListToAny(status.StagedPaths),
+		"unstaged_paths":           stringListToAny(status.UnstagedPaths),
+		"untracked_paths":          stringListToAny(status.UntrackedPaths),
+		"preexisting_dirty_paths":  stringListToAny(preexistingDirty),
+		"preexisting_staged_paths": stringListToAny(preexistingStaged),
+		"touched_dirty_paths":      stringListToAny(touchedDirty),
+		"staged_touched_paths":     stringListToAny(stagedTouched),
+		"non_touched_staged_paths": stringListToAny(nonTouchedStaged),
+		"has_preexisting_dirty":    len(preexistingDirty) > 0,
+		"has_preexisting_staged":   len(preexistingStaged) > 0,
+		"has_non_touched_staged":   len(nonTouchedStaged) > 0,
+	}
+}
+
+func enrichCommandRepoContext(input map[string]any, cwd string) {
+	status, err := ComputeRepoStatus(cwd)
+	if err != nil || status == nil || !status.InGit {
+		return
+	}
+
+	commands, ok := input["commands"].([]any)
+	if !ok {
+		return
+	}
+
+	for _, raw := range commands {
+		cmd, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		paths, _ := stringSlice(cmd["git_paths"])
+		if len(paths) == 0 {
+			cmd["git_has_directory_path"] = false
+			cmd["git_has_dot_path"] = false
+			continue
+		}
+
+		hasDir := false
+		hasDot := false
+		for _, path := range paths {
+			if path == "." {
+				hasDot = true
+			}
+			fullPath := filepath.Join(filepath.FromSlash(status.Root), filepath.FromSlash(path))
+			if info, err := os.Stat(fullPath); err == nil && info.IsDir() {
+				hasDir = true
+			}
+		}
+		cmd["git_has_directory_path"] = hasDir
+		cmd["git_has_dot_path"] = hasDot
+	}
 }
 
 func computeFact(fact Fact, cwd string) (any, error) {

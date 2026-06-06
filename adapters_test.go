@@ -148,6 +148,29 @@ func TestDetectCodexTreatsArgvAsSingleCommand(t *testing.T) {
 	}
 }
 
+func TestParsedCommandMapsExposeGitMetadata(t *testing.T) {
+	parsed := parseArgvCommand([]string{"git", "checkout", "--", "src/main.go"})
+	commands := parsedCommandMaps(parsed)
+	if len(commands) != 1 {
+		t.Fatalf("expected 1 command map, got %d", len(commands))
+	}
+	first := commands[0].(map[string]any)
+	if first["git_subcommand"] != "checkout" {
+		t.Fatalf("expected git_subcommand checkout, got %v", first["git_subcommand"])
+	}
+	if first["git_category"] != "restore" {
+		t.Fatalf("expected git_category restore, got %v", first["git_category"])
+	}
+	args, ok := first["git_args"].([]any)
+	if !ok || len(args) == 0 || args[0] != "--" {
+		t.Fatalf("expected git_args with -- separator, got %#v", first["git_args"])
+	}
+	paths, ok := first["git_paths"].([]any)
+	if !ok || len(paths) != 1 || paths[0] != "src/main.go" {
+		t.Fatalf("expected git_paths with src/main.go, got %#v", first["git_paths"])
+	}
+}
+
 func TestDetectInvalidJSON(t *testing.T) {
 	_, _, err := DetectAndParse([]byte("not json"))
 	if err == nil {

@@ -1,0 +1,10 @@
+when: |
+  tool == "Bash"
+  && input.commands.exists(c,
+       c.name == "git"
+       && c.git_subcommand == "reset"
+       && c.git_args.exists(a, a in ["--hard", "--har", "--ha"])
+     )
+  && !("git-reset-hard" in session.signals)
+action: deny
+message: "git reset --hard is forbidden. Run: ward allow git-reset-hard"

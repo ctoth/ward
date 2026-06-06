@@ -1,0 +1,13 @@
+when: |
+  tool == "Bash"
+  && input.commands.exists(c,
+       c.name == "git"
+       && c.git_subcommand == "tag"
+       && c.git_args.exists(a,
+            a == "--force"
+            || (a.startsWith("-") && !a.startsWith("--") && a.contains("f"))
+          )
+     )
+  && !("force-tag" in session.signals)
+action: deny
+message: "Tags are immutable. Create a new tag instead. Run: ward allow force-tag"

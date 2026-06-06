@@ -1,0 +1,6 @@
+when: |
+  tool == "Bash"
+  && input.commands.exists(c, c.name == "tskill")
+  && !("tskill" in session.signals)
+action: deny
+message: "Leave processes alone. Do not use tskill. Run: ward allow tskill"

@@ -187,3 +187,111 @@ func TestParseTeeRedirect(t *testing.T) {
 		t.Errorf("expected tee, got %q", cmds[1].Name)
 	}
 }
+
+func TestParseGitSwitchMetadata(t *testing.T) {
+	cmds := ParseCommands(`git checkout feature/test-branch`)
+	if len(cmds) != 1 {
+		t.Fatalf("expected 1 command, got %d", len(cmds))
+	}
+	if cmds[0].GitSubcommand != "checkout" {
+		t.Fatalf("expected git subcommand checkout, got %q", cmds[0].GitSubcommand)
+	}
+	if cmds[0].GitCategory != "switch" {
+		t.Fatalf("expected git category switch, got %q", cmds[0].GitCategory)
+	}
+}
+
+func TestParseGitRestoreMetadata(t *testing.T) {
+	cmds := ParseCommands(`git checkout -- src/main.go`)
+	if len(cmds) != 1 {
+		t.Fatalf("expected 1 command, got %d", len(cmds))
+	}
+	if cmds[0].GitCategory != "restore" {
+		t.Fatalf("expected git category restore, got %q", cmds[0].GitCategory)
+	}
+	if len(cmds[0].GitArgs) == 0 || cmds[0].GitArgs[0] != "--" {
+		t.Fatalf("expected git args to retain path-restore separator, got %#v", cmds[0].GitArgs)
+	}
+	if len(cmds[0].GitPaths) != 1 || cmds[0].GitPaths[0] != "src/main.go" {
+		t.Fatalf("expected git path operand src/main.go, got %#v", cmds[0].GitPaths)
+	}
+}
+
+func TestParseGitGlobalOptionsMetadata(t *testing.T) {
+	cmds := ParseCommands(`git -C repo status --short`)
+	if len(cmds) != 1 {
+		t.Fatalf("expected 1 command, got %d", len(cmds))
+	}
+	if cmds[0].GitSubcommand != "status" {
+		t.Fatalf("expected git subcommand status, got %q", cmds[0].GitSubcommand)
+	}
+	if cmds[0].GitCategory != "query" {
+		t.Fatalf("expected git category query, got %q", cmds[0].GitCategory)
+	}
+}
+
+func TestParseGitAddPathspecs(t *testing.T) {
+	cmds := ParseCommands(`git add src/app.py docs/spec.md`)
+	if len(cmds) != 1 {
+		t.Fatalf("expected 1 command, got %d", len(cmds))
+	}
+	if got := cmds[0].GitPaths; len(got) != 2 || got[0] != "docs/spec.md" || got[1] != "src/app.py" {
+		t.Fatalf("unexpected add pathspecs: %#v", got)
+	}
+}
+
+// TestParseNormalizesInvocation locks in the bypass-closing behavior: a command
+// reached via a directory path, an executable suffix, or a wrapper program must
+// still resolve to the real command name (and have its git metadata parsed) so
+// that rules keying on c.name / c.git_subcommand fire.
+func TestParseNormalizesInvocation(t *testing.T) {
+	cases := []struct {
+		cmd            string
+		wantName       string
+		wantSubcommand string
+		wantFullPrefix string
+	}{
+		{`/usr/bin/git reset --hard`, "git", "reset", "git reset --hard"},
+		{`/usr/local/bin/git.exe reset --hard`, "git", "reset", "git reset --hard"},
+		{`command git reset --hard`, "git", "reset", "git reset --hard"},
+		{`exec git reset --hard`, "git", "reset", "git reset --hard"},
+		{`builtin git reset --hard`, "git", "reset", "git reset --hard"},
+		{`sudo git reset --hard`, "git", "reset", "git reset --hard"},
+		{`nohup git reset --hard`, "git", "reset", "git reset --hard"},
+		{`env GIT_PAGER=cat git reset --hard`, "git", "reset", "git reset --hard"},
+		{`env -i FOO=bar git reset --hard`, "git", "reset", "git reset --hard"},
+		{`sudo VAR=v git reset --hard`, "git", "reset", "git reset --hard"},
+		{`command env git reset --hard`, "git", "reset", "git reset --hard"},
+	}
+	for _, tc := range cases {
+		cmds := ParseCommands(tc.cmd)
+		if len(cmds) != 1 {
+			t.Fatalf("%q: expected 1 command, got %d: %+v", tc.cmd, len(cmds), cmds)
+		}
+		got := cmds[0]
+		if got.Name != tc.wantName {
+			t.Errorf("%q: name = %q, want %q", tc.cmd, got.Name, tc.wantName)
+		}
+		if got.GitSubcommand != tc.wantSubcommand {
+			t.Errorf("%q: subcommand = %q, want %q", tc.cmd, got.GitSubcommand, tc.wantSubcommand)
+		}
+		if got.Full != tc.wantFullPrefix {
+			t.Errorf("%q: full = %q, want %q", tc.cmd, got.Full, tc.wantFullPrefix)
+		}
+	}
+}
+
+// TestParseDoesNotUnwrapNonWrappers ensures a bare command and a non-wrapper
+// leading token are left intact (no false unwrapping).
+func TestParseDoesNotUnwrapNonWrappers(t *testing.T) {
+	cmds := ParseCommands(`mygit reset --hard`)
+	if len(cmds) != 1 {
+		t.Fatalf("expected 1 command, got %d", len(cmds))
+	}
+	if cmds[0].Name != "mygit" {
+		t.Errorf("expected name mygit, got %q", cmds[0].Name)
+	}
+	if cmds[0].GitSubcommand != "" {
+		t.Errorf("non-git command should have no git subcommand, got %q", cmds[0].GitSubcommand)
+	}
+}

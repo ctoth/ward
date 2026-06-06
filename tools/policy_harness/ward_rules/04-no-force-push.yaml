@@ -5,6 +5,5 @@ when: |
        && c.git_subcommand == "push"
        && c.git_args.exists(a, a == "--force" || a == "-f")
      )
-  && !("force-push" in session.signals)
 action: deny
-message: "Force-push requires explicit permission. Use 'ward allow force-push' to override."
+message: "Force push is forbidden."

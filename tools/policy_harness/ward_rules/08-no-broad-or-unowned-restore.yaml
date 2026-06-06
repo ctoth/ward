@@ -1,0 +1,14 @@
+when: |
+  tool == "Bash"
+  && repo.in_git
+  && input.commands.exists(c,
+       c.name == "git"
+       && c.git_category == "restore"
+       && (
+            c.git_has_dot_path
+            || c.git_has_directory_path
+            || c.git_paths.exists(p, !(p in session.session_owned_paths || p in session.discardable_paths))
+          )
+     )
+action: deny
+message: "Restore is limited to exact owned paths or explicitly discardable paths."

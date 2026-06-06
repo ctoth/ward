@@ -2,4 +2,4 @@ when: |
   tool == "Bash"
   && input.commands.exists(c, c.name == "git" && c.git_category == "workspace_destructive")
 action: deny
-message: "Commit or branch first."
+message: "git stash and git clean are forbidden."
