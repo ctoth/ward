@@ -188,3 +188,56 @@ def test_non_force_tag_is_allowed(
         rules_dir=builtin_core_safety_rules,
     )
     assert decision == "", f"expected ALLOW but was denied: {command!r}"
+
+
+# Regression: force-push detection must cover --force, -f, --force-with-lease
+# (with or without a =ref value), bundled short flags (-fu), global-option
+# smuggling, and command wrappers. See core-safety/rules/no-force-push.yaml.
+FORCE_PUSH_BLOCKED = [
+    "git push --force",
+    "git push -f origin main",
+    "git push --force-with-lease",
+    "git push --force-with-lease=origin/main",
+    "git -C . push --force-with-lease",
+    "git push -fu origin main",
+    "sudo git push --force",
+]
+
+FORCE_PUSH_ALLOWED = [
+    "git push",
+    "git push origin main",
+    "git push -u origin main",
+    "git push --dry-run",
+]
+
+
+@pytest.mark.parametrize("command", FORCE_PUSH_BLOCKED)
+def test_force_push_variants_are_denied(
+    ward_binary, builtin_core_safety_rules, fake_home, tmp_path, command
+) -> None:
+    decision = run_eval(
+        ward_binary,
+        shell_event(command),
+        agent="claude",
+        session_id="force-push-deny",
+        cwd=tmp_path,
+        home=fake_home,
+        rules_dir=builtin_core_safety_rules,
+    )
+    assert decision != "", f"expected DENY but was allowed: {command!r}"
+
+
+@pytest.mark.parametrize("command", FORCE_PUSH_ALLOWED)
+def test_non_force_push_is_allowed(
+    ward_binary, builtin_core_safety_rules, fake_home, tmp_path, command
+) -> None:
+    decision = run_eval(
+        ward_binary,
+        shell_event(command),
+        agent="claude",
+        session_id="force-push-allow",
+        cwd=tmp_path,
+        home=fake_home,
+        rules_dir=builtin_core_safety_rules,
+    )
+    assert decision == "", f"expected ALLOW but was denied: {command!r}"

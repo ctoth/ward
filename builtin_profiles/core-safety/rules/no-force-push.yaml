@@ -3,7 +3,11 @@ when: |
   && input.commands.exists(c,
        c.name == "git"
        && c.git_subcommand == "push"
-       && c.git_args.exists(a, a == "--force" || a == "-f")
+       && c.git_args.exists(a,
+            a == "--force"
+            || a.startsWith("--force-with-lease")
+            || (a.startsWith("-") && !a.startsWith("--") && a.contains("f"))
+          )
      )
   && !("force-push" in session.signals)
 action: deny
