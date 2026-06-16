@@ -1,0 +1,10 @@
+when: |
+  tool == "Bash"
+  && input.commands.exists(c,
+       c.name == "git"
+       && c.git_subcommand == "commit"
+       && c.git_args.exists(a, a in ["--amend", "--amen", "--ame"])
+     )
+  && !("git-amend" in session.signals)
+action: deny
+message: "git commit --amend is forbidden (it rewrites history and can land on someone else's commit). Make a new commit instead. Run: ward allow git-amend"

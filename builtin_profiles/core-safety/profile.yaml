@@ -7,6 +7,7 @@ exports:
 blocks:
   operations:
     - git-reset-hard
+    - git-amend
     - git-stash
     - bulk-stage
     - force-push
