@@ -1,7 +1,7 @@
 when: |
   tool == "Bash"
   && repo.in_git
-  && !repo.clean
+  && (repo.has_staged || repo.has_unstaged)
   && input.commands.exists(c,
        c.name == "git"
        && c.git_category in ["switch", "integrate", "history_rewrite"]

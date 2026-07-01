@@ -105,8 +105,8 @@ func TestLoadRulesFromDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rules) != 8 {
-		t.Errorf("expected 8 rules, got %d", len(rules))
+	if len(rules) != 9 {
+		t.Errorf("expected 9 rules, got %d", len(rules))
 	}
 }
 
@@ -364,6 +364,74 @@ func TestEvaluateSafeCommandAllow(t *testing.T) {
 	}
 	if result != nil {
 		t.Errorf("expected nil (allow) for safe command, got %v", result)
+	}
+}
+
+// gitBashEvent builds a Bash ToolEvent whose CWD is a real git repo, so
+// repoActivation computes live git status for that tree.
+func gitBashEvent(t *testing.T, dir, command string) ToolEvent {
+	t.Helper()
+	event := ToolEvent{
+		Tool:      "Bash",
+		Input:     map[string]any{"command": command},
+		SessionID: "test",
+		CWD:       dir,
+	}
+	enrichBashCommands(&event)
+	return event
+}
+
+// A tree with ONLY untracked files is safe to switch/pull/rebase — git carries
+// untracked files across a switch. The no-dirty-tree-switch guard must not fire.
+func TestEvaluateDirtyTreeSwitchUntrackedAllow(t *testing.T) {
+	guard := loadTestGuard(t)
+	repo := initTestRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("one\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, repo, "add", "tracked.txt")
+	gitRun(t, repo, "commit", "-m", "initial")
+	// Only an untracked file remains — no staged/unstaged tracked changes.
+	if err := os.WriteFile(filepath.Join(repo, "notes.md"), []byte("scratch\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	state := NewState("implementing")
+	event := gitBashEvent(t, repo, "git checkout other-branch")
+
+	result, _, err := Evaluate(guard, state, event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != nil {
+		t.Errorf("expected allow (nil) switching with only untracked files, got %+v", result)
+	}
+}
+
+// A tree with an unstaged modification to a tracked file IS unsafe to switch —
+// the guard must still deny.
+func TestEvaluateDirtyTreeSwitchUnstagedDeny(t *testing.T) {
+	guard := loadTestGuard(t)
+	repo := initTestRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("one\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, repo, "add", "tracked.txt")
+	gitRun(t, repo, "commit", "-m", "initial")
+	// Unstaged modification to a tracked file.
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("two\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	state := NewState("implementing")
+	event := gitBashEvent(t, repo, "git checkout other-branch")
+
+	result, _, err := Evaluate(guard, state, event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result == nil || result.Action != "deny" {
+		t.Fatalf("expected deny switching with unstaged tracked changes, got %+v", result)
 	}
 }
 
