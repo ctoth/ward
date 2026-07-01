@@ -3,5 +3,6 @@ when: |
   && input.commands.exists(c, c.name.startsWith("python"))
   && facts.has_pyproject
   && !("bare-python" in session.signals)
+  && !input.command.matches("(\\b(uv|poetry|pdm|rye|pipenv)\\s+run\\b)|\\b(uvx|npx)\\b")
 action: deny
 message: "Use `uv run python` instead of bare python. Run: ward allow bare-python"

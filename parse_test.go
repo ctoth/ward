@@ -281,6 +281,76 @@ func TestParseNormalizesInvocation(t *testing.T) {
 	}
 }
 
+// TestParseUnwrapsRunWrappers locks in that Python/JS run-wrappers are unwrapped
+// so the INNER command is what rules see. Otherwise an agent can evade a
+// name-based rule (e.g. no-python-c) simply by prefixing "uv run".
+//
+// Two families:
+//   - "<wrapper> run <cmd> ...": uv, poetry, pdm, rye, pipenv — unwrap ONLY when
+//     the first non-flag argument is the "run" subcommand.
+//   - direct-exec "<wrapper> <cmd> ...": uvx, npx — the first non-flag argument
+//     IS the command.
+func TestParseUnwrapsRunWrappers(t *testing.T) {
+	cases := []struct {
+		cmd            string
+		wantName       string
+		wantFullPrefix string
+	}{
+		{`uv run python -c 'print(1)'`, "python", "python -c print(1)"},
+		{`uvx ruff check`, "ruff", "ruff check"},
+		{`poetry run python script.py`, "python", "python script.py"},
+		{`pdm run pytest -q`, "pytest", "pytest -q"},
+		{`rye run python app.py`, "python", "python app.py"},
+		{`pipenv run flask run`, "flask", "flask run"},
+		{`npx tsc --noEmit`, "tsc", "tsc --noEmit"},
+		// Boolean options before the inner command are skipped.
+		{`uv run --no-project python -c 'print(1)'`, "python", "python -c print(1)"},
+		{`npx --yes tsc --noEmit`, "tsc", "tsc --noEmit"},
+		// Nested wrapper + run-wrapper still resolves to the inner command.
+		{`sudo uv run python -c 'print(1)'`, "python", "python -c print(1)"},
+	}
+	for _, tc := range cases {
+		cmds := ParseCommands(tc.cmd)
+		if len(cmds) != 1 {
+			t.Fatalf("%q: expected 1 command, got %d: %+v", tc.cmd, len(cmds), cmds)
+		}
+		got := cmds[0]
+		if got.Name != tc.wantName {
+			t.Errorf("%q: name = %q, want %q", tc.cmd, got.Name, tc.wantName)
+		}
+		if got.Full != tc.wantFullPrefix {
+			t.Errorf("%q: full = %q, want %q", tc.cmd, got.Full, tc.wantFullPrefix)
+		}
+	}
+}
+
+// TestParseRunWrappersDoNotUnwrapNonRunSubcommands ensures the run-wrapper
+// unwrapping is conservative: only the "run" subcommand triggers it. Other
+// subcommands (uv pip, uv venv, poetry add, ...) must keep the wrapper as the
+// command name so those invocations are not misattributed.
+func TestParseRunWrappersDoNotUnwrapNonRunSubcommands(t *testing.T) {
+	cases := []struct {
+		cmd      string
+		wantName string
+	}{
+		{`uv pip install foo`, "uv"},
+		{`uv venv`, "uv"},
+		{`poetry add requests`, "poetry"},
+		{`pdm install`, "pdm"},
+		{`rye sync`, "rye"},
+		{`pipenv install`, "pipenv"},
+	}
+	for _, tc := range cases {
+		cmds := ParseCommands(tc.cmd)
+		if len(cmds) != 1 {
+			t.Fatalf("%q: expected 1 command, got %d: %+v", tc.cmd, len(cmds), cmds)
+		}
+		if cmds[0].Name != tc.wantName {
+			t.Errorf("%q: name = %q, want %q", tc.cmd, cmds[0].Name, tc.wantName)
+		}
+	}
+}
+
 // TestParseDoesNotUnwrapNonWrappers ensures a bare command and a non-wrapper
 // leading token are left intact (no false unwrapping).
 func TestParseDoesNotUnwrapNonWrappers(t *testing.T) {

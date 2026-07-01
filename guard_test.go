@@ -711,6 +711,30 @@ func TestUvRunPythonAllowed(t *testing.T) {
 	}
 }
 
+// TestRunWrapperPythonCDenied is the end-to-end regression for the run-wrapper
+// evasion: prefixing "uv run" (or uvx/poetry run/npx/...) must NOT let a
+// forbidden inner command slip past a name-based rule. After parser unwrapping,
+// "uv run python -c ..." resolves to name=python, so no-python-c fires.
+func TestRunWrapperPythonCDenied(t *testing.T) {
+	guard := loadTestGuard(t)
+	for _, cmd := range []string{
+		`uv run python -c "import sys"`,
+		`uvx python -c "import sys"`,
+		`poetry run python -c "import sys"`,
+		`sudo uv run python -c "import sys"`,
+	} {
+		state := NewState("implementing")
+		event := bashEvent(t, cmd)
+		result, _, err := Evaluate(guard, state, event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result == nil || result.Action != "deny" {
+			t.Errorf("%q should be denied (run-wrapper evasion of no-python-c), got: %v", cmd, result)
+		}
+	}
+}
+
 // --- Phase-gating tests ---
 
 func TestPhaseGatingBasic(t *testing.T) {

@@ -130,6 +130,27 @@ var wrappersWithAssignments = map[string]bool{
 	"doas": true,
 }
 
+// runWrappers are package/environment managers that execute another command via
+// a "run" subcommand (e.g. "uv run python -c ...", "poetry run pytest"). Unlike
+// commandWrappers, the inner command follows the literal "run" token, so these
+// are only unwrapped when the wrapper's first non-flag argument is "run".
+// Non-run subcommands (uv pip, uv venv, poetry add, ...) are left intact so the
+// wrapper stays the command name.
+var runWrappers = map[string]bool{
+	"uv":     true,
+	"poetry": true,
+	"pdm":    true,
+	"rye":    true,
+	"pipenv": true,
+}
+
+// execWrappers directly execute their first non-flag argument as a command
+// (e.g. "uvx ruff check", "npx tsc --noEmit"), with no "run" subcommand.
+var execWrappers = map[string]bool{
+	"uvx": true,
+	"npx": true,
+}
+
 // normalizeInvocation unwraps command wrappers and strips the directory path
 // and executable suffix from the command name, returning the real command name
 // and its arguments. Bare commands pass through unchanged.
@@ -147,30 +168,63 @@ func normalizeInvocation(parts []string) (string, []string) {
 func unwrapCommand(parts []string) []string {
 	for len(parts) > 1 {
 		head := normalizeBinaryName(parts[0])
-		if !commandWrappers[head] {
+		switch {
+		case commandWrappers[head]:
+			allowAssign := wrappersWithAssignments[head]
+			i := 1
+			for i < len(parts) {
+				tok := parts[i]
+				if strings.HasPrefix(tok, "-") {
+					i++
+					continue
+				}
+				if allowAssign && isEnvAssignment(tok) {
+					i++
+					continue
+				}
+				break
+			}
+			if i >= len(parts) {
+				// Wrapper with no real command after it; leave untouched.
+				return parts
+			}
+			parts = parts[i:]
+		case runWrappers[head]:
+			// Only "<wrapper> run <cmd> ..." unwraps. Skip leading flags to the
+			// first non-flag argument; it must be the "run" subcommand, else the
+			// wrapper stays the command (uv pip, uv venv, poetry add, ...).
+			i := skipFlags(parts, 1)
+			if i >= len(parts) || parts[i] != "run" {
+				return parts
+			}
+			// Advance past "run" and any run options to the inner command.
+			i = skipFlags(parts, i+1)
+			if i >= len(parts) {
+				return parts
+			}
+			parts = parts[i:]
+		case execWrappers[head]:
+			// "<wrapper> <cmd> ...": the first non-flag argument is the command.
+			i := skipFlags(parts, 1)
+			if i >= len(parts) {
+				return parts
+			}
+			parts = parts[i:]
+		default:
 			return parts
 		}
-		allowAssign := wrappersWithAssignments[head]
-		i := 1
-		for i < len(parts) {
-			tok := parts[i]
-			if strings.HasPrefix(tok, "-") {
-				i++
-				continue
-			}
-			if allowAssign && isEnvAssignment(tok) {
-				i++
-				continue
-			}
-			break
-		}
-		if i >= len(parts) {
-			// Wrapper with no real command after it; leave untouched.
-			return parts
-		}
-		parts = parts[i:]
 	}
 	return parts
+}
+
+// skipFlags returns the index of the first argument at or after start that does
+// not begin with "-". If all remaining tokens are flags, it returns len(parts).
+func skipFlags(parts []string, start int) int {
+	i := start
+	for i < len(parts) && strings.HasPrefix(parts[i], "-") {
+		i++
+	}
+	return i
 }
 
 // normalizeBinaryName reduces a command token to its base name without a
