@@ -47,7 +47,14 @@ echo "(exit=$?)"
 set -e
 echo
 
-echo "--- CASE 2: ls (expect ALLOW / blank deny output) ---"
+echo "--- CASE 2: uv run --python 3.11 python -c (value-flag seal; expect DENY + name=python) ---"
+set +e
+emit_event 'uv run --python 3.11 python -c \"print(1)\"' | "$WARD_BIN" eval -v
+echo "(exit=$?)"
+set -e
+echo
+
+echo "--- CASE 3: ls (expect ALLOW / blank deny output) ---"
 set +e
 emit_event 'ls' | "$WARD_BIN" eval -v
 echo "(exit=$?)"

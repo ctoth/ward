@@ -151,6 +151,50 @@ var execWrappers = map[string]bool{
 	"npx": true,
 }
 
+// uvValueFlags are the realistically common uv option flags that take a
+// SEPARATE value token (space-separated "--flag value"). Shared by "uv" (both
+// its global options and the "run" subcommand options) and by "uvx" (which also
+// accepts --from). Listing --from here too is harmless for "uv run" — that
+// subcommand never uses it, so it can't appear legitimately.
+var uvValueFlags = map[string]bool{
+	"--python":            true,
+	"-p":                  true,
+	"--with":              true,
+	"--with-requirements": true,
+	"--index":             true,
+	"--index-url":         true,
+	"--extra-index-url":   true,
+	"--directory":         true,
+	"--project":           true,
+	"--config-file":       true,
+	"--refresh-package":   true,
+	"--resolution":        true,
+	"--python-preference": true,
+	"--from":              true,
+}
+
+// wrapperValueFlags maps a normalized wrapper name to the set of its known
+// value-taking flags (the "--flag value" space-separated form). When advancing
+// past flags to find the inner command, a flag in this set consumes the flag
+// PLUS the following token, so the flag's VALUE is not mistaken for the inner
+// command name (e.g. "uv run --python 3.11 python" resolves to python, not
+// 3.11). "--flag=value" already consumes one token, and an unknown flag is
+// treated as boolean. A wrapper absent from this map (nil set) has no known
+// value flags and behaves exactly as before (all flags boolean).
+//
+// RESIDUAL (best-effort seal): an UNKNOWN value-taking flag in the space-
+// separated form before the inner command can still mis-resolve to its value.
+// This is no worse than before the seal for those unknown flags.
+var wrapperValueFlags = map[string]map[string]bool{
+	"uv":     uvValueFlags,
+	"uvx":    uvValueFlags,
+	"poetry": {"--directory": true, "-C": true, "--project": true},
+	"pdm":    {"--directory": true, "-C": true, "--project": true, "-p": true},
+	"rye":    {"--directory": true, "-C": true, "--project": true},
+	"pipenv": {"--python": true},
+	"npx":    {"--package": true, "-p": true, "--userconfig": true},
+}
+
 // normalizeInvocation unwraps command wrappers and strips the directory path
 // and executable suffix from the command name, returning the real command name
 // and its arguments. Bare commands pass through unchanged.
@@ -193,19 +237,20 @@ func unwrapCommand(parts []string) []string {
 			// Only "<wrapper> run <cmd> ..." unwraps. Skip leading flags to the
 			// first non-flag argument; it must be the "run" subcommand, else the
 			// wrapper stays the command (uv pip, uv venv, poetry add, ...).
-			i := skipFlags(parts, 1)
+			valueFlags := wrapperValueFlags[head]
+			i := skipFlags(parts, 1, valueFlags)
 			if i >= len(parts) || parts[i] != "run" {
 				return parts
 			}
 			// Advance past "run" and any run options to the inner command.
-			i = skipFlags(parts, i+1)
+			i = skipFlags(parts, i+1, valueFlags)
 			if i >= len(parts) {
 				return parts
 			}
 			parts = parts[i:]
 		case execWrappers[head]:
 			// "<wrapper> <cmd> ...": the first non-flag argument is the command.
-			i := skipFlags(parts, 1)
+			i := skipFlags(parts, 1, wrapperValueFlags[head])
 			if i >= len(parts) {
 				return parts
 			}
@@ -219,9 +264,26 @@ func unwrapCommand(parts []string) []string {
 
 // skipFlags returns the index of the first argument at or after start that does
 // not begin with "-". If all remaining tokens are flags, it returns len(parts).
-func skipFlags(parts []string, start int) int {
+//
+// valueFlags names the wrapper's known value-taking flags in the space-separated
+// "--flag value" form: such a flag consumes the flag PLUS the following token, so
+// the flag's VALUE is not mistaken for the inner command (e.g. "--python 3.11"
+// consumes both, landing on the real command that follows). The "--flag=value"
+// form already carries its value in one token, and an unknown flag is treated as
+// boolean (one token). A nil valueFlags set means "no known value flags", which
+// reproduces the original boolean-only behavior.
+func skipFlags(parts []string, start int, valueFlags map[string]bool) int {
 	i := start
 	for i < len(parts) && strings.HasPrefix(parts[i], "-") {
+		tok := parts[i]
+		// A known value-taking flag in "--flag value" form (no '=') swallows the
+		// next token as its value, provided one exists. If it is the last token,
+		// fall through to boolean handling so the caller's bounds check trips and
+		// the wrapper is left untouched.
+		if valueFlags[tok] && !strings.ContainsRune(tok, '=') && i+1 < len(parts) {
+			i += 2
+			continue
+		}
 		i++
 	}
 	return i

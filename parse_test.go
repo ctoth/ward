@@ -324,6 +324,66 @@ func TestParseUnwrapsRunWrappers(t *testing.T) {
 	}
 }
 
+// TestParseUnwrapsRunWrappersWithValueFlags locks in that value-taking option
+// flags in the space-separated "--flag value" form placed BEFORE the inner
+// command are advanced past correctly, so the flag's VALUE is not mistaken for
+// the inner command name. Without a per-wrapper value-flag table, "uv run
+// --python 3.11 python -c ..." would resolve name=3.11 and evade no-python-c.
+func TestParseUnwrapsRunWrappersWithValueFlags(t *testing.T) {
+	cases := []struct {
+		cmd            string
+		wantName       string
+		wantFullPrefix string
+	}{
+		// Space-separated value flags before the inner command.
+		{`uv run --python 3.11 python -c 'print(1)'`, "python", "python -c print(1)"},
+		{`uvx --from build pyproject-build`, "pyproject-build", "pyproject-build"},
+		{`poetry run --directory foo python app.py`, "python", "python app.py"},
+		// Multiple value flags in a row still resolve to the inner command.
+		{`uv run --python 3.11 --with rich python -c 'x'`, "python", "python -c x"},
+		// Short-form value flag (-p == --python for uv).
+		{`uv run -p 3.11 python -c 'x'`, "python", "python -c x"},
+		// Regression guard: the "--flag=value" form already worked and must keep working.
+		{`uv run --python=3.11 python -c 'x'`, "python", "python -c x"},
+		// Regression guard: boolean flag interleaved with a value flag.
+		{`uv run --no-project --python 3.11 python -c 'x'`, "python", "python -c x"},
+	}
+	for _, tc := range cases {
+		cmds := ParseCommands(tc.cmd)
+		if len(cmds) != 1 {
+			t.Fatalf("%q: expected 1 command, got %d: %+v", tc.cmd, len(cmds), cmds)
+		}
+		got := cmds[0]
+		if got.Name != tc.wantName {
+			t.Errorf("%q: name = %q, want %q", tc.cmd, got.Name, tc.wantName)
+		}
+		if got.Full != tc.wantFullPrefix {
+			t.Errorf("%q: full = %q, want %q", tc.cmd, got.Full, tc.wantFullPrefix)
+		}
+	}
+}
+
+// TestParseValueFlagSealNegativesUnchanged confirms the value-flag seal did not
+// alter non-run subcommands: uv pip / uv venv keep the wrapper as the name.
+func TestParseValueFlagSealNegativesUnchanged(t *testing.T) {
+	cases := []struct {
+		cmd      string
+		wantName string
+	}{
+		{`uv pip install foo`, "uv"},
+		{`uv venv`, "uv"},
+	}
+	for _, tc := range cases {
+		cmds := ParseCommands(tc.cmd)
+		if len(cmds) != 1 {
+			t.Fatalf("%q: expected 1 command, got %d: %+v", tc.cmd, len(cmds), cmds)
+		}
+		if cmds[0].Name != tc.wantName {
+			t.Errorf("%q: name = %q, want %q", tc.cmd, cmds[0].Name, tc.wantName)
+		}
+	}
+}
+
 // TestParseRunWrappersDoNotUnwrapNonRunSubcommands ensures the run-wrapper
 // unwrapping is conservative: only the "run" subcommand triggers it. Other
 // subcommands (uv pip, uv venv, poetry add, ...) must keep the wrapper as the
