@@ -50,7 +50,8 @@ def decide(state: PolicyState, action: Action) -> Decision:
         return Decision(True, "non-force push allowed")
 
     if isinstance(action, SwitchBranch):
-        return Decision(state.clean, "branch switching requires a clean tree")
+        allowed = state.clean or "dirty-tree-switch" in state.signals
+        return Decision(allowed, "branch switching requires a clean tree or override")
 
     if isinstance(action, RestoreDir):
         return Decision(False, "directory-wide restore is forbidden")

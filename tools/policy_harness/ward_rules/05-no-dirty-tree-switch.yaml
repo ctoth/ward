@@ -2,9 +2,10 @@ when: |
   tool == "Bash"
   && repo.in_git
   && (repo.has_staged || repo.has_unstaged)
+  && !("dirty-tree-switch" in session.signals)
   && input.commands.exists(c,
        c.name == "git"
        && c.git_category in ["switch", "integrate", "history_rewrite"]
      )
 action: deny
-message: "Switching/integration/history rewrite requires a clean tree."
+message: "Switching/integration/history rewrite requires a clean tree. Run: ward allow dirty-tree-switch"

@@ -11,6 +11,15 @@ def test_dirty_tree_branch_switch_is_denied() -> None:
     assert not decision.allow
 
 
+def test_dirty_tree_branch_switch_override_is_allowed() -> None:
+    state = PolicyState(
+        current_unstaged_paths=frozenset({"src/app.py"}),
+        signals=frozenset({"dirty-tree-switch"}),
+    )
+    decision = decide(state, SwitchBranch())
+    assert decision.allow
+
+
 def test_baseline_dirty_file_requires_adoption_for_staging() -> None:
     state = PolicyState(
         baseline_dirty_paths=frozenset({"src/app.py"}),
