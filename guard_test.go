@@ -23,6 +23,30 @@ func loadTestGuard(t *testing.T) *Guard {
 	return guard
 }
 
+func TestSessionFromArgsUsesCodexThreadID(t *testing.T) {
+	originalArgs := os.Args
+	t.Cleanup(func() { os.Args = originalArgs })
+	os.Args = []string{"ward", "adopt", "src/example.go"}
+	t.Setenv(envSession, "")
+	t.Setenv(envCodexThread, "codex-thread-123")
+
+	if got := sessionFromArgs(); got != "codex-thread-123" {
+		t.Fatalf("sessionFromArgs() = %q, want Codex thread ID", got)
+	}
+}
+
+func TestSessionFromArgsPrefersWardSessionOverCodexThreadID(t *testing.T) {
+	originalArgs := os.Args
+	t.Cleanup(func() { os.Args = originalArgs })
+	os.Args = []string{"ward", "adopt", "src/example.go"}
+	t.Setenv(envSession, "explicit-session")
+	t.Setenv(envCodexThread, "codex-thread-123")
+
+	if got := sessionFromArgs(); got != "explicit-session" {
+		t.Fatalf("sessionFromArgs() = %q, want WARD_SESSION", got)
+	}
+}
+
 func TestLoadFact(t *testing.T) {
 	name, fact, err := LoadFact("testdata/facts/git_branch.yaml")
 	if err != nil {

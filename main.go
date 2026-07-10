@@ -11,6 +11,7 @@ import (
 )
 
 const envSession = "WARD_SESSION"
+const envCodexThread = "CODEX_THREAD_ID"
 const envRulesPath = "WARD_RULES_PATH"
 const envFactsPath = "WARD_FACTS_PATH"
 const envSignalsPath = "WARD_SIGNALS_PATH"
@@ -699,6 +700,9 @@ func sessionFromArgs() string {
 		}
 	}
 	if v := os.Getenv(envSession); v != "" {
+		return v
+	}
+	if v := os.Getenv(envCodexThread); v != "" {
 		return v
 	}
 	// Try process tree: if running inside Claude Code, resolve session
