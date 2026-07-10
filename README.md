@@ -165,6 +165,11 @@ Ward auto-detects the calling agent from the JSON format:
 
 Each agent gets responses in its native format.
 
+For interactive commands such as `ward adopt`, an explicit `--session` or
+`WARD_SESSION` takes priority. Under Codex, Ward automatically uses
+`CODEX_THREAD_ID` when neither is set, so the command and the hook share the
+same session state.
+
 ## Example rules
 
 ### Safety: block dangerous commands

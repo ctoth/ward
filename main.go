@@ -187,6 +187,7 @@ Environment:
   WARD_FACTS_PATH   Additional fact directories (PATH-separated), loaded
                     after installed profiles and before project overlays.
   WARD_SESSION      Session ID for phase tracking.
+  CODEX_THREAD_ID   Codex session ID fallback when WARD_SESSION is unset.
   WARD_SIGNALS_PATH Additional signal directories (PATH-separated), loaded
                     after installed profiles and before project overlays.
 
