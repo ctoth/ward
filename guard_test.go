@@ -459,6 +459,31 @@ func TestEvaluateDirtyTreeSwitchUnstagedDeny(t *testing.T) {
 	}
 }
 
+func TestEvaluateDirtyTreeSwitchSignalAllowsExplicitOverride(t *testing.T) {
+	guard := loadTestGuard(t)
+	repo := initTestRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("one\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, repo, "add", "tracked.txt")
+	gitRun(t, repo, "commit", "-m", "initial")
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("two\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	state := NewState("implementing")
+	state.Signals["dirty-tree-switch"] = Signal{OneTimeUse: true}
+	event := gitBashEvent(t, repo, "git switch main")
+
+	result, _, err := Evaluate(guard, state, event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != nil {
+		t.Fatalf("expected explicit dirty-tree-switch signal to allow switch, got %+v", result)
+	}
+}
+
 func TestEvaluateCodexLocalShellMatchesBashRules(t *testing.T) {
 	guard := loadTestGuard(t)
 	state := NewState("implementing")

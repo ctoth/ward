@@ -4,7 +4,7 @@ from uuid import uuid4
 
 import pytest
 
-from policy_harness.actions import RestoreFile, Stage
+from policy_harness.actions import RestoreFile, Stage, SwitchBranch
 from policy_harness.event_builders import action_to_event, shell_event
 from policy_harness.git_repo_state import materialize_policy_state
 from policy_harness.model import PolicyState
@@ -71,6 +71,53 @@ def test_installed_builtin_profiles_drive_runtime_policy(
         rules_dir=None,
     )
     assert restore_denied != ""
+
+
+def test_dirty_tree_switch_signal_overrides_installed_profile(
+    ward_binary,
+    git_repo,
+    fake_home,
+) -> None:
+    run_cli(
+        ward_binary,
+        ["install-defaults", "--profile", "core-safety,git-discipline"],
+        cwd=git_repo,
+        home=fake_home,
+    )
+
+    state = PolicyState(current_unstaged_paths=frozenset({"src/app.py"}))
+    materialize_policy_state(git_repo, state)
+    session_id = f"dirty-switch-{uuid4().hex}"
+    write_state(session_id, state, git_repo)
+
+    denied = run_eval(
+        ward_binary,
+        action_to_event(SwitchBranch()),
+        agent="claude",
+        session_id=session_id,
+        cwd=git_repo,
+        home=fake_home,
+        rules_dir=None,
+    )
+    assert denied != ""
+
+    run_cli(
+        ward_binary,
+        ["allow", "dirty-tree-switch"],
+        cwd=git_repo,
+        home=fake_home,
+        session_id=session_id,
+    )
+    allowed = run_eval(
+        ward_binary,
+        action_to_event(SwitchBranch()),
+        agent="claude",
+        session_id=session_id,
+        cwd=git_repo,
+        home=fake_home,
+        rules_dir=None,
+    )
+    assert allowed == ""
 
 
 # Regression: the reset-hard rule must key off the parsed git subcommand/args,
