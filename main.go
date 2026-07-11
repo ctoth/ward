@@ -75,6 +75,12 @@ func main() {
 			os.Exit(0)
 		}
 		cmdEndSession()
+	case "start-actor":
+		if hasHelpFlag(os.Args[2:]) {
+			fmt.Fprintln(os.Stderr, helpStartActor)
+			os.Exit(0)
+		}
+		cmdStartActor()
 	case "end-actor":
 		if hasHelpFlag(os.Args[2:]) {
 			fmt.Fprintln(os.Stderr, helpEndActor)
@@ -170,6 +176,7 @@ Commands:
   adopt         Grant commit authority for exact repo-relative paths
   discard       Grant discard authority for exact repo-relative paths
   revoke        Remove an override signal
+  start-actor   Initialize one actor record (SubagentStart hook)
   end-actor     Delete one actor record (SubagentStop hook)
   end-session   Delete a session family and registry (SessionEnd hook)
   install       Register ward hooks in Claude Code settings
@@ -251,6 +258,15 @@ Usage:
 
 The session_id is read from the stdin JSON, same format as other hooks.`
 
+const helpStartActor = `ward start-actor - initialize one actor state record
+
+Reads a Claude SubagentStart JSON event from stdin. Creates the actor named by
+agent_id in the uninitialized phase and records agent_type without mutating the
+main actor or sibling workers. Repeated starts do not reset an existing phase.
+
+Usage:
+  ward start-actor < event.json`
+
 const helpEndActor = `ward end-actor - delete one actor state record
 
 Reads a Claude SubagentStop JSON event from stdin. Deletes only the actor named
@@ -261,9 +277,9 @@ Usage:
 
 const helpInstall = `ward install - register ward hooks in Claude Code settings
 
-Adds ward's PreToolUse (eval), SubagentStop (end-actor), and SessionEnd
-(end-session) hooks to ~/.claude/settings.json. Idempotent — safe to run
-multiple times.
+Adds ward's PreToolUse (eval), SubagentStart (start-actor), SubagentStop
+(end-actor), and SessionEnd (end-session) hooks to ~/.claude/settings.json.
+Idempotent — safe to run multiple times.
 Preserves all other hooks (claudio, etc).
 
 Usage:
@@ -600,6 +616,20 @@ func cmdEndSession() {
 	fmt.Fprintf(os.Stderr, "ward: session ended %s\n", event.SessionID)
 }
 
+func cmdStartActor() {
+	input, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ward: read stdin: %v\n", err)
+		os.Exit(1)
+	}
+	key, err := InitializeActorFromHookInput(input)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ward: start actor: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Fprintf(os.Stderr, "ward: actor started %s/%s\n", key.SessionKey, key.ActorKey)
+}
+
 func cmdEndActor() {
 	input, err := io.ReadAll(os.Stdin)
 	if err != nil {
@@ -856,6 +886,27 @@ func SetPhaseFromHookInput(input []byte, phase string) (StateKey, error) {
 	}
 	err = UpdateState(key, phase, func(state *State) error {
 		state.Phase = phase
+		if event.AgentType != "" {
+			state.AgentType = event.AgentType
+		}
+		return nil
+	})
+	return key, err
+}
+
+func InitializeActorFromHookInput(input []byte) (StateKey, error) {
+	event, err := hookIdentityFromInput(input)
+	if err != nil {
+		return StateKey{}, err
+	}
+	key, err := stateKeyFromHook(event)
+	if err != nil {
+		return StateKey{}, err
+	}
+	if key.ActorKey == MainActorKey {
+		return StateKey{}, fmt.Errorf("SubagentStart input has no actor identity")
+	}
+	err = UpdateState(key, UninitializedPhase, func(state *State) error {
 		if event.AgentType != "" {
 			state.AgentType = event.AgentType
 		}

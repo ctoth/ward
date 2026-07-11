@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"reflect"
 	"testing"
 )
 
@@ -133,6 +134,82 @@ func TestHookInputInitializationCannotFallBackToMain(t *testing.T) {
 	}
 	if _, err := LoadState(StateKey{SessionKey: session, ActorKey: MainActorKey}); !os.IsNotExist(err) {
 		t.Fatalf("missing worker identity mutated main: %v", err)
+	}
+}
+
+func TestSubagentStartInitializesRealWorkerIdempotentlyWithoutMutatingOtherActors(t *testing.T) {
+	session := "subagent-start-" + t.Name()
+	mainKey := StateKey{SessionKey: session, ActorKey: MainActorKey}
+	workerKey := StateKey{SessionKey: session, ActorKey: "worker-a"}
+	siblingKey := StateKey{SessionKey: session, ActorKey: "worker-b"}
+	t.Cleanup(func() { _ = DeleteSessionFamily(session) })
+	t.Setenv(envActorID, "")
+
+	mainState := NewState("foreman")
+	mainState.History = []string{"Read"}
+	siblingState := NewState("experiment-worker")
+	siblingState.Signals["approved"] = Signal{}
+	if err := SaveState(mainKey, mainState); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveState(siblingKey, siblingState); err != nil {
+		t.Fatal(err)
+	}
+	mainBefore, err := LoadState(mainKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	siblingBefore, err := LoadState(siblingKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	input := []byte(`{"hook_event_name":"SubagentStart","session_id":"` + session + `","agent_id":"worker-a","agent_type":"scout"}`)
+	for range 2 {
+		resolved, err := InitializeActorFromHookInput(input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resolved != workerKey {
+			t.Fatalf("initialized key = %#v, want %#v", resolved, workerKey)
+		}
+	}
+
+	workerState, err := LoadState(workerKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if workerState.Phase != UninitializedPhase || workerState.AgentType != "scout" {
+		t.Fatalf("worker state = %#v, want uninitialized scout", workerState)
+	}
+	loadedMain, err := LoadState(mainKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loadedSibling, err := LoadState(siblingKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(loadedMain, mainBefore) {
+		t.Fatalf("SubagentStart mutated main: got %#v, want %#v", loadedMain, mainBefore)
+	}
+	if !reflect.DeepEqual(loadedSibling, siblingBefore) {
+		t.Fatalf("SubagentStart mutated sibling: got %#v, want %#v", loadedSibling, siblingBefore)
+	}
+
+	workerState.Phase = "scout"
+	if err := SaveState(workerKey, workerState); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := InitializeActorFromHookInput(input); err != nil {
+		t.Fatal(err)
+	}
+	workerState, err = LoadState(workerKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if workerState.Phase != "scout" {
+		t.Fatalf("idempotent SubagentStart reset initialized phase to %q", workerState.Phase)
 	}
 }
 

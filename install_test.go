@@ -13,9 +13,10 @@ import (
 func TestWardHookSpecsIncludeActorAndFamilyLifecycleCleanup(t *testing.T) {
 	specs := wardHookSpecs()
 	want := map[string]string{
-		"PreToolUse":   " eval",
-		"SubagentStop": " end-actor",
-		"SessionEnd":   " end-session",
+		"PreToolUse":    " eval",
+		"SubagentStart": " start-actor",
+		"SubagentStop":  " end-actor",
+		"SessionEnd":    " end-session",
 	}
 	seen := make(map[string]int)
 	for _, spec := range specs {
@@ -83,7 +84,7 @@ func TestWardHookInstallIsIdempotentAndPreservesUnrelatedHooks(t *testing.T) {
 	if unrelatedEntry["command"] != "other-tool check" {
 		t.Fatalf("unrelated hook changed: %#v", unrelatedEntry)
 	}
-	for _, event := range []string{"SubagentStop", "SessionEnd"} {
+	for _, event := range []string{"SubagentStart", "SubagentStop", "SessionEnd"} {
 		groups, ok := hooks[event].([]interface{})
 		if !ok || len(groups) != 1 {
 			t.Fatalf("%s groups = %#v, want one", event, hooks[event])

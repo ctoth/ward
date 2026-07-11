@@ -21,6 +21,10 @@ func wardHookSpecs() []captainhook.HookSpec {
 			Timeout: 5,
 		},
 		{
+			Event:   "SubagentStart",
+			Command: exe + " start-actor",
+		},
+		{
 			Event:   "SubagentStop",
 			Command: exe + " end-actor",
 		},
