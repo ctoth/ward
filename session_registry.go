@@ -59,6 +59,7 @@ func unregisterBySessionID(sessionID string) error {
 		}
 		return err
 	}
+	var removeErr error
 	for _, entry := range entries {
 		if !strings.HasPrefix(entry.Name(), "pid-") {
 			continue
@@ -73,10 +74,12 @@ func unregisterBySessionID(sessionID string) error {
 			continue
 		}
 		if reg.SessionID == sessionID {
-			os.Remove(path)
+			if err := os.Remove(path); err != nil && !os.IsNotExist(err) && removeErr == nil {
+				removeErr = err
+			}
 		}
 	}
-	return nil
+	return removeErr
 }
 
 // resolveSessionFromProcessTree walks up the process tree to find the Claude Code

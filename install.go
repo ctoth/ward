@@ -9,7 +9,7 @@ import (
 	captainhook "github.com/ctoth/captain-hook"
 )
 
-var wardIdentity = captainhook.CommandIdentity("ward", "ward.exe")
+var wardIdentity = captainhook.CommandIdentity("ward", "ward.exe", filepath.Base(wardExePath()))
 
 func wardHookSpecs() []captainhook.HookSpec {
 	exe := wardExePath()
@@ -19,6 +19,10 @@ func wardHookSpecs() []captainhook.HookSpec {
 			Matcher: "Bash|Edit|Write|WebFetch",
 			Command: exe + " eval",
 			Timeout: 5,
+		},
+		{
+			Event:   "SubagentStop",
+			Command: exe + " end-actor",
 		},
 		{
 			Event:   "SessionEnd",
@@ -50,19 +54,8 @@ func cmdInstall() {
 		os.Exit(1)
 	}
 
-	settings, err := captainhook.ReadSettings(path)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "ward: read settings: %v\n", err)
-		os.Exit(1)
-	}
-
-	if err := captainhook.Install(settings, wardHookSpecs(), wardIdentity); err != nil {
+	if err := installWardHooks(path); err != nil {
 		fmt.Fprintf(os.Stderr, "ward: install hooks: %v\n", err)
-		os.Exit(1)
-	}
-
-	if err := captainhook.WriteSettings(path, settings); err != nil {
-		fmt.Fprintf(os.Stderr, "ward: write settings: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -70,6 +63,20 @@ func cmdInstall() {
 	for _, spec := range wardHookSpecs() {
 		fmt.Fprintf(os.Stderr, "  %s: %s\n", spec.Event, spec.Command)
 	}
+}
+
+func installWardHooks(path string) error {
+	settings, err := captainhook.ReadSettings(path)
+	if err != nil {
+		return fmt.Errorf("read settings: %w", err)
+	}
+	if err := captainhook.Install(settings, wardHookSpecs(), wardIdentity); err != nil {
+		return err
+	}
+	if err := captainhook.WriteSettings(path, settings); err != nil {
+		return fmt.Errorf("write settings: %w", err)
+	}
+	return nil
 }
 
 func cmdUninstall() {

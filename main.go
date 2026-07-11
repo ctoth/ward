@@ -12,6 +12,7 @@ import (
 
 const envSession = "WARD_SESSION"
 const envCodexThread = "CODEX_THREAD_ID"
+const envActorID = "WARD_ACTOR_ID"
 const envRulesPath = "WARD_RULES_PATH"
 const envFactsPath = "WARD_FACTS_PATH"
 const envSignalsPath = "WARD_SIGNALS_PATH"
@@ -74,6 +75,12 @@ func main() {
 			os.Exit(0)
 		}
 		cmdEndSession()
+	case "end-actor":
+		if hasHelpFlag(os.Args[2:]) {
+			fmt.Fprintln(os.Stderr, helpEndActor)
+			os.Exit(0)
+		}
+		cmdEndActor()
 	case "install":
 		if hasHelpFlag(os.Args[2:]) {
 			fmt.Fprintln(os.Stderr, helpInstall)
@@ -158,12 +165,13 @@ Usage:
 
 Commands:
   eval          Evaluate a tool call event from stdin
-  set           Set the session phase
+  set           Set one actor's phase
   allow         Add a one-time override signal
   adopt         Grant commit authority for exact repo-relative paths
   discard       Grant discard authority for exact repo-relative paths
   revoke        Remove an override signal
-  end-session   Clean up session registry (SessionEnd hook)
+  end-actor     Delete one actor record (SubagentStop hook)
+  end-session   Delete a session family and registry (SessionEnd hook)
   install       Register ward hooks in Claude Code settings
   install-defaults Install built-in default profiles
   install-profile  Install a profile from a local path or git source
@@ -188,6 +196,7 @@ Environment:
                     after installed profiles and before project overlays.
   WARD_SESSION      Session ID for phase tracking.
   CODEX_THREAD_ID   Codex session ID fallback when WARD_SESSION is unset.
+  WARD_ACTOR_ID     Explicit actor identity for CLI-launched workers.
   WARD_SIGNALS_PATH Additional signal directories (PATH-separated), loaded
                     after installed profiles and before project overlays.
 
@@ -213,12 +222,13 @@ Example:
     "tool_input":{"command":"git stash"},"session_id":"abc",
     "cwd":"/tmp"}' | ward eval -v`
 
-const helpSet = `ward set - set the session phase
+const helpSet = `ward set - set one actor's phase
 
 Usage:
-  ward set <phase> [--session ID]
+  ward set <phase> [--session ID] [--agent ID]
+  ward set <phase> --hook-input < event.json
 
-The session ID can also be provided via the WARD_SESSION env var.
+The session and actor can also be provided via WARD_SESSION and WARD_ACTOR_ID.
 
 Example:
   ward set implementing --session abc`
@@ -231,20 +241,29 @@ and reports manifest/load/compile errors for the effective configuration.
 Usage:
   ward validate`
 
-const helpEndSession = `ward end-session - clean up session registry
+const helpEndSession = `ward end-session - delete a session family
 
-Reads a SessionEnd event from stdin (JSON with session_id), removes the
-process tree registry entry for that session. Use as a SessionEnd hook.
+Reads a SessionEnd event from stdin (JSON with session_id), removes every actor
+record, the legacy state file, and process registry entries for that session.
 
 Usage:
   ward end-session < event.json
 
 The session_id is read from the stdin JSON, same format as other hooks.`
 
+const helpEndActor = `ward end-actor - delete one actor state record
+
+Reads a Claude SubagentStop JSON event from stdin. Deletes only the actor named
+by agent_id; the main actor and sibling workers remain unchanged.
+
+Usage:
+  ward end-actor < event.json`
+
 const helpInstall = `ward install - register ward hooks in Claude Code settings
 
-Adds ward's PreToolUse (eval) and SessionEnd (end-session) hooks to
-~/.claude/settings.json. Idempotent — safe to run multiple times.
+Adds ward's PreToolUse (eval), SubagentStop (end-actor), and SessionEnd
+(end-session) hooks to ~/.claude/settings.json. Idempotent — safe to run
+multiple times.
 Preserves all other hooks (claudio, etc).
 
 Usage:
@@ -396,32 +415,41 @@ func cmdEval() {
 		}
 	}
 
-	state, err := LoadState(event.SessionID)
+	key, err := stateKeyFromHook(event)
 	if err != nil {
-		state = NewState(DefaultPhase)
+		fmt.Fprintf(os.Stderr, "ward: resolve state identity: %v\n", err)
+		os.Exit(1)
 	}
-
-	if repoStatus, repoErr := ComputeRepoStatus(event.CWD); repoErr == nil {
-		state.SyncRepo(repoStatus)
+	initialPhase := DefaultPhase
+	if key.ActorKey != MainActorKey {
+		initialPhase = UninitializedPhase
 	}
-	state.Update(event.Tool, event.Input)
+	repoStatus, _ := ComputeRepoStatus(event.CWD)
 
 	var verboseWriter io.Writer
 	if verbose {
 		verboseWriter = os.Stderr
 	}
 
-	result, matchedSignals, err := EvaluateVerbose(guard, state, event, verboseWriter)
+	var result *Result
+	err = UpdateState(key, initialPhase, func(state *State) error {
+		if event.AgentType != "" {
+			state.AgentType = event.AgentType
+		}
+		state.SyncRepo(repoStatus)
+		state.Update(event.Tool, event.Input)
+		var matchedSignals map[string]bool
+		var evalErr error
+		result, matchedSignals, evalErr = EvaluateVerbose(guard, state, event, verboseWriter)
+		if evalErr != nil {
+			return evalErr
+		}
+		state.ConsumeSignals(matchedSignals)
+		return nil
+	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ward: evaluate: %v\n", err)
 		os.Exit(1)
-	}
-
-	// Consume one-time-use signals that were referenced by matched rules
-	state.ConsumeSignals(matchedSignals)
-
-	if err := SaveState(event.SessionID, state); err != nil {
-		fmt.Fprintf(os.Stderr, "ward: save state: %v\n", err)
 	}
 
 	if result == nil {
@@ -449,11 +477,10 @@ func cmdAllow() {
 		fmt.Fprintf(os.Stderr, "ward: invalid signal name %q\n", name)
 		os.Exit(1)
 	}
-	sessionID := sessionFromArgs()
-
-	state, err := LoadState(sessionID)
+	key, err := commandStateKey()
 	if err != nil {
-		state = NewState("")
+		fmt.Fprintf(os.Stderr, "ward: resolve state identity: %v\n", err)
+		os.Exit(1)
 	}
 
 	// Default to one-time use unless a signal definition says otherwise.
@@ -466,9 +493,10 @@ func cmdAllow() {
 		}
 	}
 
-	state.Signals[name] = Signal{OneTimeUse: oneTime}
-
-	if err := SaveState(sessionID, state); err != nil {
+	if err := UpdateState(key, DefaultPhase, func(state *State) error {
+		state.Signals[name] = Signal{OneTimeUse: oneTime}
+		return nil
+	}); err != nil {
 		fmt.Fprintf(os.Stderr, "ward: save state: %v\n", err)
 		os.Exit(1)
 	}
@@ -481,16 +509,15 @@ func cmdGrantPaths(kind string) {
 		os.Exit(1)
 	}
 
-	sessionID := sessionFromArgs()
+	key, err := commandStateKey()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ward: resolve state identity: %v\n", err)
+		os.Exit(1)
+	}
 	rawPaths := pathArgsFromCLI(os.Args[2:])
 	if len(rawPaths) == 0 {
 		fmt.Fprintf(os.Stderr, "ward: no paths supplied for %s\n", kind)
 		os.Exit(1)
-	}
-
-	state, err := LoadState(sessionID)
-	if err != nil {
-		state = NewState("")
 	}
 
 	cwd, _ := os.Getwd()
@@ -503,8 +530,6 @@ func cmdGrantPaths(kind string) {
 		fmt.Fprintf(os.Stderr, "ward: %s requires running inside a git repo\n", kind)
 		os.Exit(1)
 	}
-	state.SyncRepo(repoStatus)
-
 	normalized := make([]string, 0, len(rawPaths))
 	for _, rawPath := range rawPaths {
 		path, err := normalizeGrantPath(repoStatus.Root, cwd, rawPath)
@@ -515,17 +540,18 @@ func cmdGrantPaths(kind string) {
 		normalized = append(normalized, path)
 	}
 
-	switch kind {
-	case "adopt":
-		state.AdoptedPaths = uniquePaths(append(state.AdoptedPaths, normalized...))
-	case "discard":
-		state.DiscardablePaths = uniquePaths(append(state.DiscardablePaths, normalized...))
-	default:
-		fmt.Fprintf(os.Stderr, "ward: unknown grant kind %q\n", kind)
-		os.Exit(1)
-	}
-
-	if err := SaveState(sessionID, state); err != nil {
+	if err := UpdateState(key, DefaultPhase, func(state *State) error {
+		state.SyncRepo(repoStatus)
+		switch kind {
+		case "adopt":
+			state.AdoptedPaths = uniquePaths(append(state.AdoptedPaths, normalized...))
+		case "discard":
+			state.DiscardablePaths = uniquePaths(append(state.DiscardablePaths, normalized...))
+		default:
+			return fmt.Errorf("unknown grant kind %q", kind)
+		}
+		return nil
+	}); err != nil {
 		fmt.Fprintf(os.Stderr, "ward: save state: %v\n", err)
 		os.Exit(1)
 	}
@@ -539,18 +565,16 @@ func cmdRevoke() {
 		os.Exit(1)
 	}
 	name := os.Args[2]
-	sessionID := sessionFromArgs()
-
-	state, err := LoadState(sessionID)
+	key, err := commandStateKey()
 	if err != nil {
-		// No state means no signal to revoke.
-		fmt.Fprintf(os.Stderr, "ward: signal %q not active (no session state)\n", name)
-		return
+		fmt.Fprintf(os.Stderr, "ward: resolve state identity: %v\n", err)
+		os.Exit(1)
 	}
 
-	delete(state.Signals, name)
-
-	if err := SaveState(sessionID, state); err != nil {
+	if err := UpdateState(key, DefaultPhase, func(state *State) error {
+		delete(state.Signals, name)
+		return nil
+	}); err != nil {
 		fmt.Fprintf(os.Stderr, "ward: save state: %v\n", err)
 		os.Exit(1)
 	}
@@ -564,39 +588,66 @@ func cmdEndSession() {
 		os.Exit(1)
 	}
 
-	var raw map[string]any
-	if err := json.Unmarshal(input, &raw); err != nil {
-		fmt.Fprintf(os.Stderr, "ward: parse input: %v\n", err)
+	event, parseErr := hookIdentityFromInput(input)
+	if parseErr != nil {
+		fmt.Fprintf(os.Stderr, "ward: %v\n", parseErr)
 		os.Exit(1)
 	}
-
-	sessionID, _ := raw["session_id"].(string)
-	if sessionID == "" {
-		fmt.Fprintln(os.Stderr, "ward: no session_id in input")
+	if err := DeleteSessionFromHookInput(input); err != nil {
+		fmt.Fprintf(os.Stderr, "ward: end session: %v\n", err)
 		os.Exit(1)
 	}
+	fmt.Fprintf(os.Stderr, "ward: session ended %s\n", event.SessionID)
+}
 
-	if err := unregisterBySessionID(sessionID); err != nil {
-		fmt.Fprintf(os.Stderr, "ward: unregister: %v\n", err)
+func cmdEndActor() {
+	input, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ward: read stdin: %v\n", err)
+		os.Exit(1)
 	}
-	fmt.Fprintf(os.Stderr, "ward: session ended %s\n", sessionID)
+	event, parseErr := hookIdentityFromInput(input)
+	if parseErr != nil {
+		fmt.Fprintf(os.Stderr, "ward: %v\n", parseErr)
+		os.Exit(1)
+	}
+	if err := DeleteActorFromHookInput(input); err != nil {
+		fmt.Fprintf(os.Stderr, "ward: end actor: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Fprintf(os.Stderr, "ward: actor ended %s/%s\n", event.SessionID, event.AgentID)
 }
 
 func cmdSet() {
 	if len(os.Args) < 3 {
-		fmt.Fprintln(os.Stderr, "usage: ward set <phase> [--session ID]")
+		fmt.Fprintln(os.Stderr, "usage: ward set <phase> [--session ID] [--agent ID] [--hook-input]")
 		os.Exit(1)
 	}
 	phase := os.Args[2]
-	sessionID := sessionFromArgs()
-
-	state, err := LoadState(sessionID)
-	if err != nil {
-		state = NewState(phase)
+	if flagValue(os.Args, "--hook-input") != "" || hasExactFlag(os.Args, "--hook-input") {
+		input, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ward: read stdin: %v\n", err)
+			os.Exit(1)
+		}
+		key, err := SetPhaseFromHookInput(input, phase)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ward: set phase from hook: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Fprintf(os.Stderr, "ward: phase → %s (%s/%s)\n", phase, key.SessionKey, key.ActorKey)
+		return
 	}
-	state.Phase = phase
 
-	if err := SaveState(sessionID, state); err != nil {
+	key, err := commandStateKey()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ward: resolve state identity: %v\n", err)
+		os.Exit(1)
+	}
+	if err := UpdateState(key, phase, func(state *State) error {
+		state.Phase = phase
+		return nil
+	}); err != nil {
 		fmt.Fprintf(os.Stderr, "ward: save state: %v\n", err)
 		os.Exit(1)
 	}
@@ -645,11 +696,11 @@ func pathArgsFromCLI(args []string) []string {
 	paths := make([]string, 0, len(args))
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
-		if arg == "--session" {
+		if arg == "--session" || arg == "--agent" {
 			i++
 			continue
 		}
-		if strings.HasPrefix(arg, "--session=") {
+		if strings.HasPrefix(arg, "--session=") || strings.HasPrefix(arg, "--agent=") || arg == "--hook-input" {
 			continue
 		}
 		if strings.HasPrefix(arg, "-") {
@@ -694,30 +745,149 @@ func normalizeGrantPath(repoRoot, cwd, rawPath string) (string, error) {
 	return rel, nil
 }
 
-func sessionFromArgs() string {
-	for i, arg := range os.Args {
-		if arg == "--session" && i+1 < len(os.Args) {
-			return os.Args[i+1]
+func flagValue(args []string, name string) string {
+	for i, arg := range args {
+		if strings.HasPrefix(arg, name+"=") {
+			return strings.TrimPrefix(arg, name+"=")
+		}
+		if arg == name && i+1 < len(args) {
+			return args[i+1]
 		}
 	}
-	if v := os.Getenv(envSession); v != "" {
-		return v
+	return ""
+}
+
+func hasExactFlag(args []string, name string) bool {
+	for _, arg := range args {
+		if arg == name {
+			return true
+		}
 	}
-	if v := os.Getenv(envCodexThread); v != "" {
-		return v
+	return false
+}
+
+func resolveCommandSession(args []string, processSession, cwd string) string {
+	if explicit := flagValue(args, "--session"); explicit != "" {
+		return explicit
 	}
-	// Try process tree: if running inside Claude Code, resolve session
-	// from the CC ancestor PID registry.
-	if sid := resolveSessionFromProcessTree(); sid != "" {
-		return sid
+	if value := os.Getenv(envSession); value != "" {
+		return value
 	}
-	// Fallback: deterministic session ID from working directory.
-	wd, err := os.Getwd()
+	if value := os.Getenv(envCodexThread); value != "" {
+		return value
+	}
+	if processSession != "" {
+		return processSession
+	}
+	sum := sha256.Sum256([]byte(cwd))
+	return fmt.Sprintf("wd-%x", sum[:8])
+}
+
+func sessionFromArgs() string {
+	wd, _ := os.Getwd()
+	return resolveCommandSession(os.Args, resolveSessionFromProcessTree(), wd)
+}
+
+func stateKeyFromCommandArgs(args []string, processSession, cwd string) (StateKey, error) {
+	actorKey := flagValue(args, "--agent")
+	if actorKey == "" {
+		actorKey = os.Getenv(envActorID)
+	}
+	if actorKey == "" {
+		actorKey = MainActorKey
+	}
+	key := StateKey{
+		SessionKey: resolveCommandSession(args, processSession, cwd),
+		ActorKey:   actorKey,
+	}
+	if err := validateStateKey(key); err != nil {
+		return StateKey{}, err
+	}
+	return key, nil
+}
+
+func commandStateKey() (StateKey, error) {
+	wd, _ := os.Getwd()
+	return stateKeyFromCommandArgs(os.Args, resolveSessionFromProcessTree(), wd)
+}
+
+func stateKeyFromHook(event ToolEvent) (StateKey, error) {
+	actorKey := event.AgentID
+	if actorKey == "" {
+		actorKey = os.Getenv(envActorID)
+	}
+	if actorKey == "" {
+		actorKey = MainActorKey
+	}
+	key := StateKey{SessionKey: event.SessionID, ActorKey: actorKey}
+	if err := validateStateKey(key); err != nil {
+		return StateKey{}, err
+	}
+	return key, nil
+}
+
+func hookIdentityFromInput(input []byte) (ToolEvent, error) {
+	var raw map[string]any
+	if err := json.Unmarshal(input, &raw); err != nil {
+		return ToolEvent{}, fmt.Errorf("parse hook input: %w", err)
+	}
+	event := ToolEvent{
+		SessionID: strField(raw, "session_id"),
+		AgentID:   strField(raw, "agent_id"),
+		AgentType: strField(raw, "agent_type"),
+	}
+	if event.SessionID == "" {
+		return ToolEvent{}, fmt.Errorf("no session_id in input")
+	}
+	return event, nil
+}
+
+func SetPhaseFromHookInput(input []byte, phase string) (StateKey, error) {
+	event, err := hookIdentityFromInput(input)
 	if err != nil {
-		return ""
+		return StateKey{}, err
 	}
-	h := sha256.Sum256([]byte(wd))
-	return fmt.Sprintf("wd-%x", h[:8])
+	key, err := stateKeyFromHook(event)
+	if err != nil {
+		return StateKey{}, err
+	}
+	if key.ActorKey == MainActorKey {
+		return StateKey{}, fmt.Errorf("actor initialization hook has no actor identity")
+	}
+	err = UpdateState(key, phase, func(state *State) error {
+		state.Phase = phase
+		if event.AgentType != "" {
+			state.AgentType = event.AgentType
+		}
+		return nil
+	})
+	return key, err
+}
+
+func DeleteActorFromHookInput(input []byte) error {
+	event, err := hookIdentityFromInput(input)
+	if err != nil {
+		return err
+	}
+	key, err := stateKeyFromHook(event)
+	if err != nil {
+		return err
+	}
+	if key.ActorKey == MainActorKey {
+		return fmt.Errorf("SubagentStop input has no actor identity")
+	}
+	return DeleteActorState(key)
+}
+
+func DeleteSessionFromHookInput(input []byte) error {
+	event, err := hookIdentityFromInput(input)
+	if err != nil {
+		return err
+	}
+	if err := DeleteSessionFamily(event.SessionID); err != nil {
+		return err
+	}
+	return unregisterBySessionID(event.SessionID)
 }
 
 // loadGuard discovers facts and rules from standard locations, compiles them.

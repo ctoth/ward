@@ -32,6 +32,8 @@ type ToolEvent struct {
 	Tool      string         // "Bash", "Edit", "Write", "Read", etc.
 	Input     map[string]any // tool-specific input
 	SessionID string
+	AgentID   string // stable actor identity supplied by the host
+	AgentType string // role metadata; never part of the storage key
 	EventType string // "pre_tool", "post_tool"
 	CWD       string
 }
@@ -100,6 +102,8 @@ func enrichBashCommands(event *ToolEvent) {
 func parseClaude(raw map[string]any, eventName string) (ToolEvent, AgentType, error) {
 	event := ToolEvent{
 		SessionID: strField(raw, "session_id"),
+		AgentID:   strField(raw, "agent_id"),
+		AgentType: strField(raw, "agent_type"),
 		CWD:       strField(raw, "cwd"),
 	}
 
@@ -123,6 +127,8 @@ func parseClaude(raw map[string]any, eventName string) (ToolEvent, AgentType, er
 func parseGemini(raw map[string]any, eventName string) (ToolEvent, AgentType, error) {
 	event := ToolEvent{
 		SessionID: strField(raw, "session_id"),
+		AgentID:   strField(raw, "agent_id"),
+		AgentType: strField(raw, "agent_type"),
 		CWD:       strField(raw, "cwd"),
 	}
 
@@ -146,6 +152,8 @@ func parseGemini(raw map[string]any, eventName string) (ToolEvent, AgentType, er
 func parseCodex(raw map[string]any, hookEvent map[string]any) (ToolEvent, AgentType, error) {
 	event := ToolEvent{
 		SessionID: strField(raw, "session_id"),
+		AgentID:   strField(raw, "agent_id"),
+		AgentType: strField(raw, "agent_type"),
 		CWD:       strField(raw, "cwd"),
 		EventType: "post_tool", // Codex only has after-events
 	}

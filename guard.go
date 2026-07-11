@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/cel-go/cel"
@@ -270,12 +272,28 @@ func CompileRule(r *Rule) error {
 
 const maxHistory = 100
 
+const (
+	CurrentStateSchemaVersion = 1
+	MainActorKey              = "main"
+	UninitializedPhase        = "uninitialized"
+)
+
+// StateKey identifies one mutable actor record within a session family.
+type StateKey struct {
+	SessionKey string
+	ActorKey   string
+}
+
 // Signal represents a named permission stored in session state.
 type Signal struct {
 	OneTimeUse bool `json:"one_time_use"`
 }
 
 type State struct {
+	SchemaVersion      int               `json:"schema_version"`
+	SessionKey         string            `json:"session_key"`
+	ActorKey           string            `json:"actor_key"`
+	AgentType          string            `json:"agent_type,omitempty"`
 	Phase              string            `json:"phase"`
 	History            []string          `json:"history"`
 	Signals            map[string]Signal `json:"signals"`
@@ -470,19 +488,44 @@ func stateDir() string {
 	return filepath.Join(tmp, "ward")
 }
 
-func statePath(sessionID string) string {
-	return filepath.Join(stateDir(), sessionID+".json")
+func hashedStateComponent(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return fmt.Sprintf("%x", sum[:])
 }
 
-func LoadState(sessionID string) (*State, error) {
-	data, err := os.ReadFile(statePath(sessionID))
-	if err != nil {
-		return nil, err
+func sessionFamilyPath(sessionKey string) string {
+	return filepath.Join(stateDir(), "families", hashedStateComponent(sessionKey))
+}
+
+func statePath(key StateKey) string {
+	return filepath.Join(sessionFamilyPath(key.SessionKey), "actors", hashedStateComponent(key.ActorKey)+".json")
+}
+
+func legacyStatePath(sessionKey string) string {
+	return filepath.Join(stateDir(), sessionKey+".json")
+}
+
+func validateStateKey(key StateKey) error {
+	if key.SessionKey == "" {
+		return fmt.Errorf("empty session key")
 	}
-	var s State
-	if err := json.Unmarshal(data, &s); err != nil {
-		return nil, err
+	if key.ActorKey == "" {
+		return fmt.Errorf("empty actor key")
 	}
+	return nil
+}
+
+func validateStateIdentity(key StateKey, state *State) error {
+	if state.SchemaVersion != CurrentStateSchemaVersion {
+		return fmt.Errorf("state schema version %d does not match %d", state.SchemaVersion, CurrentStateSchemaVersion)
+	}
+	if state.SessionKey != key.SessionKey || state.ActorKey != key.ActorKey {
+		return fmt.Errorf("state identity collision: stored (%q, %q), requested (%q, %q)", state.SessionKey, state.ActorKey, key.SessionKey, key.ActorKey)
+	}
+	return nil
+}
+
+func initializeStateCollections(s *State) {
 	if s.History == nil {
 		s.History = []string{}
 	}
@@ -504,19 +547,257 @@ func LoadState(sessionID string) (*State, error) {
 	if s.DiscardablePaths == nil {
 		s.DiscardablePaths = []string{}
 	}
-	return &s, nil
 }
 
-func SaveState(sessionID string, s *State) error {
-	dir := stateDir()
+func readActorState(key StateKey) (*State, error) {
+	data, err := os.ReadFile(statePath(key))
+	if err != nil {
+		return nil, err
+	}
+	var state State
+	if err := json.Unmarshal(data, &state); err != nil {
+		return nil, fmt.Errorf("decode actor state: %w", err)
+	}
+	if err := validateStateIdentity(key, &state); err != nil {
+		return nil, err
+	}
+	initializeStateCollections(&state)
+	return &state, nil
+}
+
+func legacyPathIsSafe(sessionKey string) bool {
+	return sessionKey != "" && sessionKey != "." && filepath.Base(sessionKey) == sessionKey
+}
+
+func loadStateUnlocked(key StateKey) (*State, error) {
+	if err := validateStateKey(key); err != nil {
+		return nil, err
+	}
+
+	state, err := readActorState(key)
+	if err == nil {
+		if key.ActorKey == MainActorKey && legacyPathIsSafe(key.SessionKey) {
+			if removeErr := os.Remove(legacyStatePath(key.SessionKey)); removeErr != nil && !os.IsNotExist(removeErr) {
+				return nil, fmt.Errorf("finish legacy cleanup: %w", removeErr)
+			}
+		}
+		return state, nil
+	}
+	if !os.IsNotExist(err) {
+		return nil, err
+	}
+	if key.ActorKey != MainActorKey || !legacyPathIsSafe(key.SessionKey) {
+		return nil, os.ErrNotExist
+	}
+
+	data, legacyErr := os.ReadFile(legacyStatePath(key.SessionKey))
+	if legacyErr != nil {
+		return nil, legacyErr
+	}
+	var migrated State
+	if err := json.Unmarshal(data, &migrated); err != nil {
+		return nil, fmt.Errorf("decode legacy state: %w", err)
+	}
+	if migrated.SchemaVersion != 0 || migrated.SessionKey != "" || migrated.ActorKey != "" {
+		return nil, fmt.Errorf("legacy state contains unexpected actor identity metadata")
+	}
+	initializeStateCollections(&migrated)
+	if err := saveStateUnlocked(key, &migrated); err != nil {
+		return nil, fmt.Errorf("migrate legacy state: %w", err)
+	}
+	if err := os.Remove(legacyStatePath(key.SessionKey)); err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("remove migrated legacy state: %w", err)
+	}
+	return &migrated, nil
+}
+
+var actorStateLocks sync.Map
+
+func actorStateLock(key StateKey) *sync.Mutex {
+	lockKey := key.SessionKey + "\x00" + key.ActorKey
+	lock, _ := actorStateLocks.LoadOrStore(lockKey, &sync.Mutex{})
+	return lock.(*sync.Mutex)
+}
+
+func actorStateLockPath(key StateKey) string {
+	return filepath.Join(stateDir(), "locks", hashedStateComponent(key.SessionKey), hashedStateComponent(key.ActorKey)+".lock")
+}
+
+func lockActorState(key StateKey) (func(), error) {
+	if err := validateStateKey(key); err != nil {
+		return nil, err
+	}
+	localLock := actorStateLock(key)
+	localLock.Lock()
+	lockPath := actorStateLockPath(key)
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
+		localLock.Unlock()
+		return nil, err
+	}
+
+	deadline := time.Now().Add(4 * time.Second)
+	for {
+		err := os.Mkdir(lockPath, 0o700)
+		if err == nil {
+			return func() {
+				_ = os.Remove(lockPath)
+				localLock.Unlock()
+			}, nil
+		}
+		if !os.IsExist(err) {
+			localLock.Unlock()
+			return nil, err
+		}
+		if info, statErr := os.Stat(lockPath); statErr == nil && time.Since(info.ModTime()) > 30*time.Second {
+			_ = os.Remove(lockPath)
+			continue
+		}
+		if time.Now().After(deadline) {
+			localLock.Unlock()
+			return nil, fmt.Errorf("timed out locking actor state (%q, %q)", key.SessionKey, key.ActorKey)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func LoadState(key StateKey) (*State, error) {
+	unlock, err := lockActorState(key)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	return loadStateUnlocked(key)
+}
+
+func atomicWriteFile(path string, data []byte, mode os.FileMode) error {
+	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	data, err := json.Marshal(s)
+	tmp, err := os.CreateTemp(dir, ".state-*.tmp")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(statePath(sessionID), data, 0o644)
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if err := tmp.Chmod(mode); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
+}
+
+func saveStateUnlocked(key StateKey, state *State) error {
+	if err := validateStateKey(key); err != nil {
+		return err
+	}
+	state.SchemaVersion = CurrentStateSchemaVersion
+	state.SessionKey = key.SessionKey
+	state.ActorKey = key.ActorKey
+	initializeStateCollections(state)
+	data, err := json.Marshal(state)
+	if err != nil {
+		return err
+	}
+	return atomicWriteFile(statePath(key), data, 0o644)
+}
+
+func SaveState(key StateKey, state *State) error {
+	unlock, err := lockActorState(key)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	return saveStateUnlocked(key, state)
+}
+
+// UpdateState serializes a complete actor read/modify/write transaction.
+func UpdateState(key StateKey, initialPhase string, update func(*State) error) error {
+	unlock, err := lockActorState(key)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	state, err := loadStateUnlocked(key)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return err
+		}
+		state = NewState(initialPhase)
+	}
+	if err := update(state); err != nil {
+		return err
+	}
+	return saveStateUnlocked(key, state)
+}
+
+func DeleteActorState(key StateKey) error {
+	unlock, err := lockActorState(key)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	if _, err := readActorState(key); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if err := os.Remove(statePath(key)); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	_ = os.Remove(filepath.Dir(statePath(key)))
+	return nil
+}
+
+func DeleteSessionFamily(sessionKey string) error {
+	if sessionKey == "" {
+		return fmt.Errorf("empty session key")
+	}
+	family := sessionFamilyPath(sessionKey)
+	actorDir := filepath.Join(family, "actors")
+	entries, err := os.ReadDir(actorDir)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(actorDir, entry.Name()))
+		if err != nil {
+			return err
+		}
+		var state State
+		if err := json.Unmarshal(data, &state); err != nil {
+			return fmt.Errorf("decode actor state during session cleanup: %w", err)
+		}
+		if state.SchemaVersion != CurrentStateSchemaVersion || state.SessionKey != sessionKey || state.ActorKey == "" {
+			return fmt.Errorf("state identity collision during session cleanup")
+		}
+	}
+	if err := os.RemoveAll(family); err != nil {
+		return err
+	}
+	if legacyPathIsSafe(sessionKey) {
+		if err := os.Remove(legacyStatePath(sessionKey)); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
 }
 
 // Path normalization: convert backslashes to forward slashes.

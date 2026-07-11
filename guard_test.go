@@ -1,8 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -663,15 +665,16 @@ func TestEvaluateWithScope(t *testing.T) {
 }
 
 func TestStatePersistence(t *testing.T) {
-	sessionID := "test-persist-" + t.Name()
+	key := StateKey{SessionKey: "test-persist-" + t.Name(), ActorKey: MainActorKey}
+	t.Cleanup(func() { _ = DeleteSessionFamily(key.SessionKey) })
 	state := NewState("implementing")
 	state.History = []string{"Read", "Bash", "Edit", "Bash", "Read"}
 
-	if err := SaveState(sessionID, state); err != nil {
+	if err := SaveState(key, state); err != nil {
 		t.Fatal(err)
 	}
 
-	loaded, err := LoadState(sessionID)
+	loaded, err := LoadState(key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -684,6 +687,239 @@ func TestStatePersistence(t *testing.T) {
 	}
 	if loaded.History[2] != "Edit" {
 		t.Errorf("expected Edit at index 2, got %q", loaded.History[2])
+	}
+}
+
+func TestActorStateIsolationWithinSessionFamily(t *testing.T) {
+	session := "actor-isolation-" + t.Name()
+	t.Cleanup(func() { _ = DeleteSessionFamily(session) })
+
+	mainKey := StateKey{SessionKey: session, ActorKey: MainActorKey}
+	scoutKey := StateKey{SessionKey: session, ActorKey: "worker-a"}
+	experimentKey := StateKey{SessionKey: session, ActorKey: "worker-b"}
+
+	mainState := NewState("foreman")
+	mainState.History = []string{"Read"}
+	mainState.Signals["manager-only"] = Signal{OneTimeUse: true}
+	mainState.AdoptedPaths = []string{"prompts/manager.md"}
+	if err := SaveState(mainKey, mainState); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := LoadState(scoutKey); !os.IsNotExist(err) {
+		t.Fatalf("uninitialized worker inherited state: %v", err)
+	}
+
+	scoutState := NewState("scout")
+	scoutState.History = []string{"Read", "Bash"}
+	scoutState.TouchedFiles = []string{"reports/scout.md"}
+	if err := SaveState(scoutKey, scoutState); err != nil {
+		t.Fatal(err)
+	}
+
+	experimentState := NewState("experiment-worker")
+	experimentState.Signals["experiment-only"] = Signal{OneTimeUse: false}
+	experimentState.DiscardablePaths = []string{"scratch/result.txt"}
+	if err := SaveState(experimentKey, experimentState); err != nil {
+		t.Fatal(err)
+	}
+
+	loadedMain, err := LoadState(mainKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loadedScout, err := LoadState(scoutKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loadedExperiment, err := LoadState(experimentKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if loadedMain.Phase != "foreman" || len(loadedMain.History) != 1 || len(loadedMain.Signals) != 1 || len(loadedMain.AdoptedPaths) != 1 {
+		t.Fatalf("main state contaminated: %#v", loadedMain)
+	}
+	if loadedScout.Phase != "scout" || len(loadedScout.History) != 2 || len(loadedScout.TouchedFiles) != 1 || len(loadedScout.Signals) != 0 {
+		t.Fatalf("scout state contaminated: %#v", loadedScout)
+	}
+	if loadedExperiment.Phase != "experiment-worker" || len(loadedExperiment.Signals) != 1 || len(loadedExperiment.DiscardablePaths) != 1 || len(loadedExperiment.History) != 0 {
+		t.Fatalf("experiment state contaminated: %#v", loadedExperiment)
+	}
+	if statePath(mainKey) == statePath(scoutKey) || statePath(scoutKey) == statePath(experimentKey) {
+		t.Fatal("actors must have separate state files")
+	}
+}
+
+func TestLegacyMigrationOnlyToMainIsCompleteAndIdempotent(t *testing.T) {
+	session := "legacy-migration-" + t.Name()
+	t.Cleanup(func() { _ = DeleteSessionFamily(session) })
+
+	legacy := NewState("foreman")
+	legacy.History = []string{"Read", "Bash"}
+	legacy.Signals["legacy-signal"] = Signal{OneTimeUse: false}
+	legacy.RepoRoot = "C:/repo"
+	legacy.BaselineDirtyPaths = []string{"old.txt"}
+	legacy.TouchedFiles = []string{"new.txt"}
+	legacy.TouchedSinceCommit = []string{"new.txt"}
+	legacy.AdoptedPaths = []string{"adopted.txt"}
+	legacy.DiscardablePaths = []string{"discard.txt"}
+	data, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(stateDir(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacyStatePath(session), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	workerKey := StateKey{SessionKey: session, ActorKey: "worker-before-start"}
+	if _, err := LoadState(workerKey); !os.IsNotExist(err) {
+		t.Fatalf("worker must not migrate legacy state: %v", err)
+	}
+	if _, err := os.Stat(legacyStatePath(session)); err != nil {
+		t.Fatalf("worker load changed legacy state: %v", err)
+	}
+
+	mainKey := StateKey{SessionKey: session, ActorKey: MainActorKey}
+	migrated, err := LoadState(mainKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if migrated.Phase != "foreman" || len(migrated.History) != 2 || len(migrated.Signals) != 1 || len(migrated.AdoptedPaths) != 1 || len(migrated.DiscardablePaths) != 1 {
+		t.Fatalf("migration lost state: %#v", migrated)
+	}
+	if migrated.SchemaVersion != CurrentStateSchemaVersion || migrated.SessionKey != session || migrated.ActorKey != MainActorKey {
+		t.Fatalf("migration identity metadata is wrong: %#v", migrated)
+	}
+	if _, err := os.Stat(legacyStatePath(session)); !os.IsNotExist(err) {
+		t.Fatalf("legacy state still exists after migration: %v", err)
+	}
+
+	// Simulate interruption after the actor file was atomically installed but
+	// before the legacy file was removed. A retry must keep the actor record and
+	// finish cleanup without duplicating or resetting it.
+	migrated.History = append(migrated.History, "Edit")
+	if err := SaveState(mainKey, migrated); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacyStatePath(session), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	retried, err := LoadState(mainKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(retried.History) != 3 || retried.History[2] != "Edit" {
+		t.Fatalf("retry replaced the migrated actor record: %#v", retried.History)
+	}
+	if _, err := os.Stat(legacyStatePath(session)); !os.IsNotExist(err) {
+		t.Fatalf("retry did not finish legacy cleanup: %v", err)
+	}
+}
+
+func TestActorStateRejectsMalformedOrCollidingIdentity(t *testing.T) {
+	session := "identity-validation-" + t.Name()
+	key := StateKey{SessionKey: session, ActorKey: "worker-a"}
+	t.Cleanup(func() { _ = DeleteSessionFamily(session) })
+
+	if err := os.MkdirAll(filepath.Dir(statePath(key)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	bad := []byte(`{"schema_version":1,"session_key":"other-session","actor_key":"worker-a","phase":"scout"}`)
+	if err := os.WriteFile(statePath(key), bad, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadState(key); err == nil {
+		t.Fatal("expected colliding identity diagnostic")
+	}
+
+	missingIdentity := []byte(`{"phase":"scout"}`)
+	if err := os.WriteFile(statePath(key), missingIdentity, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadState(key); err == nil {
+		t.Fatal("expected missing identity diagnostic")
+	}
+}
+
+func TestActorUpdatesAreRaceSafeAndSameActorIsSerialized(t *testing.T) {
+	session := "actor-race-" + t.Name()
+	t.Cleanup(func() { _ = DeleteSessionFamily(session) })
+
+	keys := []StateKey{
+		{SessionKey: session, ActorKey: "worker-a"},
+		{SessionKey: session, ActorKey: "worker-b"},
+	}
+	var wg sync.WaitGroup
+	for _, key := range keys {
+		key := key
+		for i := 0; i < 25; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if err := UpdateState(key, "scout", func(state *State) error {
+					state.Update("Bash", map[string]any{})
+					state.Signals[key.ActorKey] = Signal{OneTimeUse: false}
+					state.AdoptedPaths = appendUniquePath(state.AdoptedPaths, key.ActorKey+".txt")
+					return nil
+				}); err != nil {
+					t.Errorf("UpdateState(%s): %v", key.ActorKey, err)
+				}
+			}()
+		}
+	}
+	wg.Wait()
+
+	for _, key := range keys {
+		state, err := LoadState(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(state.History) != 25 {
+			t.Fatalf("%s history length = %d, want 25", key.ActorKey, len(state.History))
+		}
+		if len(state.Signals) != 1 || len(state.AdoptedPaths) != 1 {
+			t.Fatalf("%s mutable state lost updates: %#v", key.ActorKey, state)
+		}
+	}
+
+	serializedKey := StateKey{SessionKey: session, ActorKey: "serialized-worker"}
+	firstEntered := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	secondLaunched := make(chan struct{})
+	errors := make(chan error, 2)
+	go func() {
+		errors <- UpdateState(serializedKey, "scout", func(state *State) error {
+			close(firstEntered)
+			<-releaseFirst
+			state.Update("Read", map[string]any{})
+			return nil
+		})
+	}()
+	<-firstEntered
+	go func() {
+		close(secondLaunched)
+		errors <- UpdateState(serializedKey, "scout", func(state *State) error {
+			state.Update("Bash", map[string]any{})
+			return nil
+		})
+	}()
+	<-secondLaunched
+	close(releaseFirst)
+	for i := 0; i < 2; i++ {
+		if err := <-errors; err != nil {
+			t.Fatal(err)
+		}
+	}
+	serialized, err := LoadState(serializedKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(serialized.History) != 2 || serialized.History[0] != "Read" || serialized.History[1] != "Bash" {
+		t.Fatalf("same-actor updates were not serialized: %#v", serialized.History)
 	}
 }
 

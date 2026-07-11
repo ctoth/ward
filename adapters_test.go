@@ -34,6 +34,50 @@ func TestDetectClaude(t *testing.T) {
 	}
 }
 
+func TestDetectClaudePreservesTaskIdentity(t *testing.T) {
+	data := []byte(`{
+		"hook_event_name":"PreToolUse",
+		"session_id":"shared-session",
+		"agent_id":"agent-7f3a",
+		"agent_type":"scout",
+		"cwd":"C:/repo",
+		"tool_name":"Read",
+		"tool_input":{"file_path":"prompts/scout.md"}
+	}`)
+
+	event, agent, err := DetectAndParse(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agent != AgentClaude {
+		t.Fatalf("expected AgentClaude, got %v", agent)
+	}
+	if event.AgentID != "agent-7f3a" {
+		t.Fatalf("AgentID = %q, want agent-7f3a", event.AgentID)
+	}
+	if event.AgentType != "scout" {
+		t.Fatalf("AgentType = %q, want scout", event.AgentType)
+	}
+}
+
+func TestDetectClaudeOldPayloadUsesMainActor(t *testing.T) {
+	data := []byte(`{
+		"hook_event_name":"PreToolUse",
+		"session_id":"legacy-session",
+		"cwd":"C:/repo",
+		"tool_name":"Read",
+		"tool_input":{}
+	}`)
+
+	event, _, err := DetectAndParse(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event.AgentID != "" || event.AgentType != "" {
+		t.Fatalf("old payload identity = (%q, %q), want empty values", event.AgentID, event.AgentType)
+	}
+}
+
 func TestDetectGemini(t *testing.T) {
 	data, err := os.ReadFile("testdata/gemini_beforetool.json")
 	if err != nil {
@@ -145,6 +189,27 @@ func TestDetectCodexTreatsArgvAsSingleCommand(t *testing.T) {
 	}
 	if first["full"] != "echo ; git stash" {
 		t.Errorf("expected argv command full string preserved literally, got %v", first["full"])
+	}
+}
+
+func TestDetectCodexPreservesExplicitActor(t *testing.T) {
+	data := []byte(`{
+		"session_id":"codex-session",
+		"agent_id":"codex-worker-2",
+		"cwd":"C:/tmp",
+		"hook_event":{
+			"event_type":"after_tool_use",
+			"tool_name":"local_shell",
+			"tool_input":{"params":{"command":["go","test","./..."]}}
+		}
+	}`)
+
+	event, _, err := DetectAndParse(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event.AgentID != "codex-worker-2" {
+		t.Fatalf("AgentID = %q, want codex-worker-2", event.AgentID)
 	}
 }
 
