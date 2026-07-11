@@ -179,7 +179,7 @@ Commands:
   start-actor   Initialize one actor record (SubagentStart hook)
   end-actor     Delete one actor record (SubagentStop hook)
   end-session   Delete a session family and registry (SessionEnd hook)
-  install       Register ward hooks in Claude Code settings
+  install       Register ward hooks in Claude Code or Codex settings
   install-defaults Install built-in default profiles
   install-profile  Install a profile from a local path or git source
   update-profile   Reinstall an installed profile from its recorded source
@@ -187,7 +187,7 @@ Commands:
   list-profiles    List installed profiles
   resolve-config   Export the effective loaded ruleset/config
   validate-profile Validate a profile bundle without installing it
-  uninstall     Remove ward hooks from Claude Code settings
+  uninstall     Remove ward hooks from Claude Code or Codex settings
   validate      Validate all rule and fact files
 
 Configuration:
@@ -275,15 +275,17 @@ by agent_id; the main actor and sibling workers remain unchanged.
 Usage:
   ward end-actor < event.json`
 
-const helpInstall = `ward install - register ward hooks in Claude Code settings
+const helpInstall = `ward install - register ward hooks in host settings
 
 Adds ward's PreToolUse (eval), SubagentStart (start-actor), SubagentStop
-(end-actor), and SessionEnd (end-session) hooks to ~/.claude/settings.json.
+(end-actor), and SessionEnd (end-session) hooks to the selected host file.
 Idempotent — safe to run multiple times.
 Preserves all other hooks (claudio, etc).
 
 Usage:
-  ward install`
+  ward install [claude|codex]
+
+The default host is claude. Codex hooks are installed to ~/.codex/hooks.json.`
 
 const helpInstallDefaults = `ward install-defaults - install built-in profile bundles
 
@@ -330,13 +332,15 @@ const helpValidateProfile = `ward validate-profile - validate a profile bundle w
 Usage:
   ward validate-profile <path> [--subdir <path>]`
 
-const helpUninstall = `ward uninstall - remove ward hooks from Claude Code settings
+const helpUninstall = `ward uninstall - remove ward hooks from host settings
 
-Removes ward's hooks from ~/.claude/settings.json.
+Removes ward's hooks from the selected host file.
 Preserves all other hooks.
 
 Usage:
-  ward uninstall`
+  ward uninstall [claude|codex]
+
+The default host is claude. Codex hooks are removed from ~/.codex/hooks.json.`
 
 const helpAllow = `ward allow - add a one-time override signal
 

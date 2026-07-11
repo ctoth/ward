@@ -10,6 +10,17 @@ Ward parses shell commands into an AST using [mvdan.cc/sh](https://pkg.go.dev/mv
 go install github.com/ctoth/ward@latest
 ```
 
+Register Ward's policy and actor-lifecycle hooks for the host you use:
+
+```bash
+ward install          # Claude Code (default)
+ward install codex    # Codex CLI
+```
+
+Both forms preserve unrelated hooks and are safe to run repeatedly. Use the
+same explicit host with `ward uninstall codex` to remove only Ward's Codex
+hooks.
+
 ## Facts
 
 Facts are shell commands evaluated on demand when referenced by rules. Each fact is one YAML file:

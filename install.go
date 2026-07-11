@@ -52,7 +52,7 @@ func wardExePath() string {
 }
 
 func cmdInstall() {
-	path, err := captainhook.FindSettingsPath()
+	path, err := wardSettingsPath(os.Args[2:])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ward: find settings: %v\n", err)
 		os.Exit(1)
@@ -67,6 +67,20 @@ func cmdInstall() {
 	for _, spec := range wardHookSpecs() {
 		fmt.Fprintf(os.Stderr, "  %s: %s\n", spec.Event, spec.Command)
 	}
+}
+
+func wardSettingsPath(args []string) (string, error) {
+	if len(args) == 0 || len(args) == 1 && args[0] == "claude" {
+		return captainhook.FindSettingsPath()
+	}
+	if len(args) == 1 && args[0] == "codex" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		return filepath.Join(home, ".codex", "hooks.json"), nil
+	}
+	return "", fmt.Errorf("usage: ward %s [claude|codex]", os.Args[1])
 }
 
 func installWardHooks(path string) error {
@@ -84,7 +98,7 @@ func installWardHooks(path string) error {
 }
 
 func cmdUninstall() {
-	path, err := captainhook.FindSettingsPath()
+	path, err := wardSettingsPath(os.Args[2:])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ward: find settings: %v\n", err)
 		os.Exit(1)
