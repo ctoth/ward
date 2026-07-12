@@ -31,10 +31,10 @@ type processEntry32 struct {
 }
 
 var (
-	kernel32              = syscall.NewLazyDLL("kernel32.dll")
-	procCreateToolhelp32  = kernel32.NewProc("CreateToolhelp32Snapshot")
-	procProcess32FirstW   = kernel32.NewProc("Process32FirstW")
-	procProcess32NextW    = kernel32.NewProc("Process32NextW")
+	kernel32             = syscall.NewLazyDLL("kernel32.dll")
+	procCreateToolhelp32 = kernel32.NewProc("CreateToolhelp32Snapshot")
+	procProcess32FirstW  = kernel32.NewProc("Process32FirstW")
+	procProcess32NextW   = kernel32.NewProc("Process32NextW")
 )
 
 type procInfo struct {
