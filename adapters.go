@@ -344,10 +344,15 @@ func parsedCommandMaps(parsed []ParsedCommand) []any {
 		for j, path := range p.GitPaths {
 			gitPaths[j] = path
 		}
+		via := make([]any, len(p.Via))
+		for j, wrapper := range p.Via {
+			via[j] = wrapper
+		}
 		commands[i] = map[string]any{
 			"name":           p.Name,
 			"full":           p.Full,
 			"args":           args,
+			"via":            via,
 			"git_subcommand": p.GitSubcommand,
 			"git_args":       gitArgs,
 			"git_category":   p.GitCategory,

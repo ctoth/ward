@@ -10,6 +10,7 @@ import (
 type ParsedCommand struct {
 	Name          string   // the command name (first word)
 	Args          []string // the arguments (everything after the command name)
+	Via           []string // wrapper chain unwrapped to reach Name, outermost first (e.g. ["sudo", "uv"])
 	Full          string   // reconstructed "name arg1 arg2 ..." without heredoc bodies
 	GitSubcommand string   // parsed git subcommand (e.g. "checkout")
 	GitArgs       []string
@@ -36,10 +37,11 @@ func ParseCommands(cmdStr string) []ParsedCommand {
 		if len(parts) == 0 {
 			return []ParsedCommand{annotateParsedCommand(ParsedCommand{Name: cmdStr, Full: cmdStr})}
 		}
-		name, fallbackArgs := normalizeInvocation(parts)
+		name, fallbackArgs, via := normalizeInvocation(parts)
 		cmd := ParsedCommand{
 			Name: name,
 			Args: fallbackArgs,
+			Via:  via,
 			Full: strings.Join(append([]string{name}, fallbackArgs...), " "),
 		}
 		return []ParsedCommand{annotateParsedCommand(cmd)}
@@ -66,7 +68,7 @@ func ParseCommands(cmdStr string) []ParsedCommand {
 			return true
 		}
 
-		name, cmdArgs := normalizeInvocation(parts)
+		name, cmdArgs, via := normalizeInvocation(parts)
 		// Full is reconstructed from the normalized invocation so that
 		// rules matching on the leading token (e.g. "^git", "^python")
 		// see through directory paths, .exe suffixes, and command wrappers.
@@ -74,6 +76,7 @@ func ParseCommands(cmdStr string) []ParsedCommand {
 		cmd := ParsedCommand{
 			Name: name,
 			Args: cmdArgs,
+			Via:  via,
 			Full: strings.Join(fullParts, " "),
 		}
 		commands = append(commands, annotateParsedCommand(cmd))
@@ -196,20 +199,24 @@ var wrapperValueFlags = map[string]map[string]bool{
 }
 
 // normalizeInvocation unwraps command wrappers and strips the directory path
-// and executable suffix from the command name, returning the real command name
-// and its arguments. Bare commands pass through unchanged.
-func normalizeInvocation(parts []string) (string, []string) {
-	parts = unwrapCommand(parts)
+// and executable suffix from the command name, returning the real command
+// name, its arguments, and the chain of wrappers that were unwrapped
+// (outermost first). Bare commands pass through with an empty chain.
+func normalizeInvocation(parts []string) (string, []string, []string) {
+	parts, via := unwrapCommand(parts)
 	if len(parts) == 0 {
-		return "", nil
+		return "", nil, via
 	}
-	return normalizeBinaryName(parts[0]), parts[1:]
+	return normalizeBinaryName(parts[0]), parts[1:], via
 }
 
 // unwrapCommand strips leading wrapper programs (and their options / env
-// assignments) so the slice begins with the real command. It loops to handle
-// nesting such as "sudo command git ...".
-func unwrapCommand(parts []string) []string {
+// assignments) so the slice begins with the real command, returning the
+// remaining parts and the normalized names of the wrappers that were
+// unwrapped, outermost first. It loops to handle nesting such as
+// "sudo command git ...".
+func unwrapCommand(parts []string) ([]string, []string) {
+	var via []string
 	for len(parts) > 1 {
 		head := normalizeBinaryName(parts[0])
 		switch {
@@ -230,9 +237,10 @@ func unwrapCommand(parts []string) []string {
 			}
 			if i >= len(parts) {
 				// Wrapper with no real command after it; leave untouched.
-				return parts
+				return parts, via
 			}
 			parts = parts[i:]
+			via = append(via, head)
 		case runWrappers[head]:
 			// Only "<wrapper> run <cmd> ..." unwraps. Skip leading flags to the
 			// first non-flag argument; it must be the "run" subcommand, else the
@@ -240,26 +248,28 @@ func unwrapCommand(parts []string) []string {
 			valueFlags := wrapperValueFlags[head]
 			i := skipFlags(parts, 1, valueFlags)
 			if i >= len(parts) || parts[i] != "run" {
-				return parts
+				return parts, via
 			}
 			// Advance past "run" and any run options to the inner command.
 			i = skipFlags(parts, i+1, valueFlags)
 			if i >= len(parts) {
-				return parts
+				return parts, via
 			}
 			parts = parts[i:]
+			via = append(via, head)
 		case execWrappers[head]:
 			// "<wrapper> <cmd> ...": the first non-flag argument is the command.
 			i := skipFlags(parts, 1, wrapperValueFlags[head])
 			if i >= len(parts) {
-				return parts
+				return parts, via
 			}
 			parts = parts[i:]
+			via = append(via, head)
 		default:
-			return parts
+			return parts, via
 		}
 	}
-	return parts
+	return parts, via
 }
 
 // skipFlags returns the index of the first argument at or after start that does

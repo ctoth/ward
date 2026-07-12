@@ -1,6 +1,7 @@
 package main
 
 import (
+	"reflect"
 	"testing"
 )
 
@@ -423,5 +424,83 @@ func TestParseDoesNotUnwrapNonWrappers(t *testing.T) {
 	}
 	if cmds[0].GitSubcommand != "" {
 		t.Errorf("non-git command should have no git subcommand, got %q", cmds[0].GitSubcommand)
+	}
+}
+
+// --- Via wrapper-chain tests ---
+// Unwrapping normalizes "uv run python x.py" to name=python so name-based
+// rules can't be evaded, but rules ALSO need to know the invocation arrived
+// through a blessed wrapper (the whole point of "use uv run python"). Via
+// records the unwrapped wrapper chain, outermost first.
+
+func TestParseViaRecordsRunWrapperChain(t *testing.T) {
+	cases := []struct {
+		cmd      string
+		wantName string
+		wantVia  []string
+	}{
+		{`uv run python app.py`, "python", []string{"uv"}},
+		{`uv run --python 3.11 python app.py`, "python", []string{"uv"}},
+		{`poetry run pytest`, "pytest", []string{"poetry"}},
+		{`uvx ruff check`, "ruff", []string{"uvx"}},
+		{`npx tsc --noEmit`, "tsc", []string{"npx"}},
+		{`sudo uv run python app.py`, "python", []string{"sudo", "uv"}},
+		{`command git status`, "git", []string{"command"}},
+		{`env FOO=1 uv run python app.py`, "python", []string{"env", "uv"}},
+	}
+	for _, tc := range cases {
+		cmds := ParseCommands(tc.cmd)
+		if len(cmds) != 1 {
+			t.Fatalf("%q: expected 1 command, got %d: %+v", tc.cmd, len(cmds), cmds)
+		}
+		if cmds[0].Name != tc.wantName {
+			t.Errorf("%q: name = %q, want %q", tc.cmd, cmds[0].Name, tc.wantName)
+		}
+		if !reflect.DeepEqual(cmds[0].Via, tc.wantVia) {
+			t.Errorf("%q: via = %#v, want %#v", tc.cmd, cmds[0].Via, tc.wantVia)
+		}
+	}
+}
+
+func TestParseViaEmptyForBareCommands(t *testing.T) {
+	for _, cmd := range []string{`python app.py`, `git status`, `uv pip install foo`} {
+		cmds := ParseCommands(cmd)
+		if len(cmds) != 1 {
+			t.Fatalf("%q: expected 1 command, got %d", cmd, len(cmds))
+		}
+		if len(cmds[0].Via) != 0 {
+			t.Errorf("%q: via = %#v, want empty", cmd, cmds[0].Via)
+		}
+	}
+}
+
+func TestParseViaPerCommandInChain(t *testing.T) {
+	// Each command in a chain carries its OWN via chain; a wrapper on one
+	// command must not bless a sibling ("uv run python ok.py && python evil.py").
+	cmds := ParseCommands(`uv run python ok.py && python evil.py`)
+	if len(cmds) != 2 {
+		t.Fatalf("expected 2 commands, got %d: %+v", len(cmds), cmds)
+	}
+	if !reflect.DeepEqual(cmds[0].Via, []string{"uv"}) {
+		t.Errorf("first via = %#v, want [uv]", cmds[0].Via)
+	}
+	if len(cmds[1].Via) != 0 {
+		t.Errorf("second via = %#v, want empty", cmds[1].Via)
+	}
+}
+
+func TestParseViaOnFallbackParsePath(t *testing.T) {
+	// Shell that fails to parse falls back to Fields splitting; the via chain
+	// must still be recorded there or the rule exemption breaks for exactly
+	// the commands the parser understands least.
+	cmds := ParseCommands("uv run python app.py ((")
+	if len(cmds) != 1 {
+		t.Fatalf("expected 1 fallback command, got %d", len(cmds))
+	}
+	if cmds[0].Name != "python" {
+		t.Errorf("fallback name = %q, want python", cmds[0].Name)
+	}
+	if !reflect.DeepEqual(cmds[0].Via, []string{"uv"}) {
+		t.Errorf("fallback via = %#v, want [uv]", cmds[0].Via)
 	}
 }

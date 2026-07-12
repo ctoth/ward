@@ -338,3 +338,22 @@ func TestEncodeResponseMarshalsGeminiContext(t *testing.T) {
 		t.Errorf("expected additionalContext, got %v", hook["additionalContext"])
 	}
 }
+
+func TestParsedCommandMapsExposeVia(t *testing.T) {
+	commands := parsedCommandMaps(ParseCommands("uv run python app.py"))
+	if len(commands) != 1 {
+		t.Fatalf("expected 1 command map, got %d", len(commands))
+	}
+	first := commands[0].(map[string]any)
+	via, ok := first["via"].([]any)
+	if !ok || len(via) != 1 || via[0] != "uv" {
+		t.Fatalf("expected via [uv], got %#v", first["via"])
+	}
+
+	bare := parsedCommandMaps(ParseCommands("python app.py"))
+	firstBare := bare[0].(map[string]any)
+	viaBare, ok := firstBare["via"].([]any)
+	if !ok || len(viaBare) != 0 {
+		t.Fatalf("expected empty via list for bare command, got %#v", firstBare["via"])
+	}
+}

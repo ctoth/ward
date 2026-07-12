@@ -1594,3 +1594,43 @@ message: env rule loaded
 func writeFile(path, content string) error {
 	return os.WriteFile(path, []byte(content), 0o644)
 }
+
+// TestMixedChainBarePythonStillDenied closes the regex-exemption hole: a
+// blessed "uv run python" in the same command string must NOT exempt a bare
+// python sibling. The rule must check the wrapper chain per command (c.via),
+// not a substring of the whole command line.
+func TestMixedChainBarePythonStillDenied(t *testing.T) {
+	guard := loadTestGuard(t)
+	state := NewState("implementing")
+	event := bashEvent(t, "uv run python ok.py && python evil.py")
+
+	result, _, err := Evaluate(guard, state, event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result == nil || result.Action != "deny" {
+		t.Errorf("bare python beside a uv-run sibling should deny, got: %v", result)
+	}
+}
+
+// TestUvRunPythonAllowedViaWrapperChain locks the exemption to the parsed
+// wrapper chain for each supported run wrapper.
+func TestUvRunPythonAllowedViaWrapperChain(t *testing.T) {
+	guard := loadTestGuard(t)
+	for _, cmd := range []string{
+		"uv run python app.py",
+		"poetry run python app.py",
+		"pdm run python app.py",
+		"sudo uv run python app.py",
+	} {
+		state := NewState("implementing")
+		event := bashEvent(t, cmd)
+		result, _, err := Evaluate(guard, state, event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result != nil && result.Action == "deny" {
+			t.Errorf("%q should not deny, got: %s", cmd, result.Message)
+		}
+	}
+}
