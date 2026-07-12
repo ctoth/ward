@@ -5,6 +5,7 @@ import "testing"
 func TestCommandSessionPrecedenceRemainsExact(t *testing.T) {
 	t.Setenv(envSession, "ward-session")
 	t.Setenv(envCodexThread, "codex-thread")
+	t.Setenv(envClaudeSession, "claude-session")
 
 	tests := []struct {
 		name           string
@@ -43,6 +44,11 @@ func TestCommandSessionPrecedenceRemainsExact(t *testing.T) {
 	}
 
 	t.Setenv(envCodexThread, "")
+	if got := resolveCommandSession([]string{"ward", "set", "scout"}, "process-session", "C:/repo"); got != "claude-session" {
+		t.Fatalf("Claude env precedence = %q, want claude-session", got)
+	}
+
+	t.Setenv(envClaudeSession, "")
 	if got := resolveCommandSession([]string{"ward", "set", "scout"}, "process-session", "C:/repo"); got != "process-session" {
 		t.Fatalf("process-tree precedence = %q, want process-session", got)
 	}

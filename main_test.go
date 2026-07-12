@@ -296,3 +296,63 @@ func TestUninitializedWorkerCannotMutateMain(t *testing.T) {
 		t.Fatalf("worker did not remain isolated/uninitialized: %#v", workerState)
 	}
 }
+
+func TestResolveCommandSessionPrefersClaudeCodeEnv(t *testing.T) {
+	// Claude Code exports CLAUDE_CODE_SESSION_ID into tool subshells; `ward
+	// allow` must use it instead of falling back to the fragile process-tree
+	// walk (broken under msys bash on Windows) and then a cwd hash.
+	t.Setenv(envSession, "")
+	t.Setenv(envCodexThread, "")
+	t.Setenv(envClaudeSession, "claude-env-session")
+
+	session, source := resolveCommandSessionWithSource(nil, "", "C:/repo")
+	if session != "claude-env-session" {
+		t.Fatalf("session = %q, want claude-env-session", session)
+	}
+	if source != "CLAUDE_CODE_SESSION_ID" {
+		t.Fatalf("source = %q, want CLAUDE_CODE_SESSION_ID", source)
+	}
+}
+
+func TestResolveCommandSessionPrecedence(t *testing.T) {
+	t.Setenv(envSession, "ward-session")
+	t.Setenv(envCodexThread, "codex-thread")
+	t.Setenv(envClaudeSession, "claude-env-session")
+
+	// Explicit --session outranks everything.
+	session, source := resolveCommandSessionWithSource(
+		[]string{"ward", "allow", "x", "--session", "explicit"}, "proc", "C:/repo")
+	if session != "explicit" || source != "--session" {
+		t.Fatalf("got (%q, %q), want (explicit, --session)", session, source)
+	}
+
+	// WARD_SESSION outranks the Claude env.
+	session, source = resolveCommandSessionWithSource(nil, "proc", "C:/repo")
+	if session != "ward-session" || source != envSession {
+		t.Fatalf("got (%q, %q), want (ward-session, %s)", session, source, envSession)
+	}
+
+	// The Codex thread (innermost agent when nested) outranks the Claude env,
+	// which in turn outranks the process walk.
+	t.Setenv(envSession, "")
+	session, source = resolveCommandSessionWithSource(nil, "proc", "C:/repo")
+	if session != "codex-thread" || source != envCodexThread {
+		t.Fatalf("got (%q, %q), want (codex-thread, %s)", session, source, envCodexThread)
+	}
+	t.Setenv(envCodexThread, "")
+	session, source = resolveCommandSessionWithSource(nil, "proc", "C:/repo")
+	if session != "claude-env-session" || source != envClaudeSession {
+		t.Fatalf("got (%q, %q), want (claude-env-session, %s)", session, source, envClaudeSession)
+	}
+
+	// With no env at all: process walk, then cwd fallback.
+	t.Setenv(envClaudeSession, "")
+	session, source = resolveCommandSessionWithSource(nil, "proc", "C:/repo")
+	if session != "proc" || source != "process-tree" {
+		t.Fatalf("got (%q, %q), want (proc, process-tree)", session, source)
+	}
+	session, source = resolveCommandSessionWithSource(nil, "", "C:/repo")
+	if source != "cwd-fallback" || len(session) == 0 || session[:3] != "wd-" {
+		t.Fatalf("got (%q, %q), want wd- fallback", session, source)
+	}
+}

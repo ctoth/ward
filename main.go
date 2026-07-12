@@ -17,6 +17,13 @@ const envRulesPath = "WARD_RULES_PATH"
 const envFactsPath = "WARD_FACTS_PATH"
 const envSignalsPath = "WARD_SIGNALS_PATH"
 
+// envClaudeSession is exported by Claude Code into every tool subshell, so
+// commands like `ward allow` can resolve the correct session without the
+// process-tree walk (which breaks under msys bash on Windows: bash.exe's
+// ancestry never reaches node.exe, so resolution used to fall back to a
+// cwd-hash key and signals landed in a state bucket eval never reads).
+const envClaudeSession = "CLAUDE_CODE_SESSION_ID"
+
 func main() {
 	if len(os.Args) < 2 || os.Args[1] == "--help" || os.Args[1] == "-h" {
 		printUsage()
@@ -520,7 +527,15 @@ func cmdAllow() {
 		fmt.Fprintf(os.Stderr, "ward: save state: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Fprintf(os.Stderr, "ward: signal %q activated\n", name)
+	_, source := resolveCommandSessionWithSource(os.Args, resolveSessionFromProcessTree(), cwd)
+	fmt.Fprintf(os.Stderr, "ward: signal %q activated (session %s, actor %s, via %s)\n",
+		name, key.SessionKey, key.ActorKey, source)
+	if source == "cwd-fallback" {
+		fmt.Fprintf(os.Stderr,
+			"ward: WARNING: session resolved from cwd hash, not a live agent session; "+
+				"hook evaluation will NOT see this signal. Pass --session <id> or set %s.\n",
+			envSession)
+	}
 }
 
 func cmdGrantPaths(kind string) {
@@ -801,20 +816,32 @@ func hasExactFlag(args []string, name string) bool {
 }
 
 func resolveCommandSession(args []string, processSession, cwd string) string {
+	session, _ := resolveCommandSessionWithSource(args, processSession, cwd)
+	return session
+}
+
+// resolveCommandSessionWithSource resolves the session key for a ward CLI
+// command and reports where the key came from, so commands can tell the user
+// which state bucket they touched instead of silently writing to a fallback
+// key that eval never reads.
+func resolveCommandSessionWithSource(args []string, processSession, cwd string) (string, string) {
 	if explicit := flagValue(args, "--session"); explicit != "" {
-		return explicit
+		return explicit, "--session"
 	}
 	if value := os.Getenv(envSession); value != "" {
-		return value
+		return value, envSession
 	}
 	if value := os.Getenv(envCodexThread); value != "" {
-		return value
+		return value, envCodexThread
+	}
+	if value := os.Getenv(envClaudeSession); value != "" {
+		return value, envClaudeSession
 	}
 	if processSession != "" {
-		return processSession
+		return processSession, "process-tree"
 	}
 	sum := sha256.Sum256([]byte(cwd))
-	return fmt.Sprintf("wd-%x", sum[:8])
+	return fmt.Sprintf("wd-%x", sum[:8]), "cwd-fallback"
 }
 
 func sessionFromArgs() string {
