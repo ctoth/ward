@@ -1684,6 +1684,79 @@ func TestNoStageUnownedBuiltinCatchesDirectAndLoopVariableAdds(t *testing.T) {
 	}
 }
 
+// A Write or Edit into a SIBLING repo must record its touch in that repo's
+// scope, not the session-cwd repo's. Observed in the field: an agent working
+// in repo A wrote new files under ../B (Write events carry cwd = A, so the
+// touches landed in A's scope as absolute paths), then `cd ../B && git add
+// <relative>` synced to B's scope — whose touched_files was empty — and
+// no-stage-unowned denied the agent's own files on every path spelling.
+func TestCrossRepoWriteRecordsTouchInTargetRepoScope(t *testing.T) {
+	rules, err := LoadRulesFromDir("builtin_profiles/git-discipline/rules")
+	if err != nil {
+		t.Fatal(err)
+	}
+	guard, err := NewGuard(nil, rules)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repoA := initTestRepo(t) // session cwd
+	repoB := initTestRepo(t) // sibling repo the agent writes into
+	// Pre-existing dirt in B, present before ward first sees the repo.
+	if err := os.WriteFile(filepath.Join(repoB, "unowned.txt"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	repoBFwd := NormalizePath(repoB)
+
+	state := NewState("implementing")
+	// Mimic the production hook: every event syncs repo scope from the
+	// effective dir, then records the tool call.
+	observe := func(event ToolEvent) {
+		t.Helper()
+		status, err := ComputeRepoStatus(EffectiveRepoDir(event))
+		if err != nil {
+			t.Fatal(err)
+		}
+		state.SyncRepo(status)
+		state.Update(event.Tool, event.Input)
+	}
+
+	// 1. Agent inspects the sibling repo (parses as git in B, baselines B).
+	observe(gitBashEvent(t, repoA, "cd "+repoBFwd+" && git status"))
+
+	// 2. Agent writes a new file into B; the event's cwd is still A.
+	if err := os.WriteFile(filepath.Join(repoB, "src.txt"), []byte("new\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	observe(ToolEvent{
+		Tool:      "Write",
+		Input:     map[string]any{"file_path": filepath.Join(repoB, "src.txt")},
+		SessionID: "test",
+		CWD:       repoA,
+	})
+
+	// 3. Staging the agent's own file in B must not deny.
+	event := gitBashEvent(t, repoA, "cd "+repoBFwd+" && git add src.txt")
+	observe(event)
+	result, _, err := Evaluate(guard, state, event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != nil && result.Action == "deny" {
+		t.Fatalf("cross-repo add of agent-authored file must not deny, got %+v", result)
+	}
+
+	// 4. Pre-existing dirt in B still denies.
+	event = gitBashEvent(t, repoA, "cd "+repoBFwd+" && git add unowned.txt")
+	observe(event)
+	result, _, err = Evaluate(guard, state, event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result == nil || result.Action != "deny" {
+		t.Fatalf("cross-repo add of unowned file must deny, got %+v", result)
+	}
+}
+
 // A cd-prefixed git command must be evaluated against the repo it TARGETS,
 // not the shell's cwd. Before EffectiveRepoDir, `cd repo && git add ...`
 // issued from outside any repository ran with repo.in_git == false and every

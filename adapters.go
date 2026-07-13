@@ -112,7 +112,15 @@ func enrichBashCommands(event *ToolEvent) {
 // issued from outside any repository was evaluated with repo.in_git == false —
 // skipping every git-discipline rule — and the inverse, where it was judged
 // against the WRONG repository's scope.
+//
+// File-path tools (Write/Edit/...) target the repository containing the file,
+// not the session cwd: a Write into a sibling repo must record its touch in
+// THAT repo's scope, or a later `cd sibling && git add <file>` is denied as
+// unowned even though the agent authored the file.
 func EffectiveRepoDir(event ToolEvent) string {
+	if filePath := strField(event.Input, "file_path"); filePath != "" {
+		return resolveShellPath(event.CWD, parentDir(filePath))
+	}
 	for _, cmd := range event.Parsed {
 		if cmd.Name != "git" {
 			continue
@@ -120,12 +128,42 @@ func EffectiveRepoDir(event ToolEvent) string {
 		if cmd.Dir == "" {
 			return event.CWD
 		}
-		if isAbsShellPath(cmd.Dir) {
-			return cmd.Dir
-		}
-		return strings.TrimSuffix(NormalizePath(event.CWD), "/") + "/" + cmd.Dir
+		return resolveShellPath(event.CWD, cmd.Dir)
 	}
 	return event.CWD
+}
+
+// resolveShellPath resolves a possibly-relative path against a base directory.
+// An empty path means the base itself.
+func resolveShellPath(base, path string) string {
+	if path == "" {
+		return base
+	}
+	path = NormalizePath(path)
+	if isAbsShellPath(path) {
+		return path
+	}
+	return strings.TrimSuffix(NormalizePath(base), "/") + "/" + path
+}
+
+// parentDir is the directory portion of a normalized path, "" when the path
+// has no directory component (resolving to the event cwd).
+func parentDir(path string) string {
+	path = NormalizePath(path)
+	idx := strings.LastIndex(path, "/")
+	switch {
+	case idx < 0:
+		return ""
+	case idx == 0:
+		return "/"
+	default:
+		dir := path[:idx]
+		// Keep a drive-root parent as "C:/", not the drive-relative "C:".
+		if strings.HasSuffix(dir, ":") {
+			dir += "/"
+		}
+		return dir
+	}
 }
 
 func parseClaude(raw map[string]any, eventName string) (ToolEvent, AgentType, error) {
