@@ -477,12 +477,100 @@ func TestEvaluateDirtyTreeSwitchSignalAllowsExplicitOverride(t *testing.T) {
 	state.Signals["dirty-tree-switch"] = Signal{OneTimeUse: true}
 	event := gitBashEvent(t, repo, "git switch main")
 
-	result, _, err := Evaluate(guard, state, event)
+	result, checkedSignals, err := Evaluate(guard, state, event)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if result != nil {
 		t.Fatalf("expected explicit dirty-tree-switch signal to allow switch, got %+v", result)
+	}
+	state.ConsumeSignals(checkedSignals)
+	if _, ok := state.Signals["dirty-tree-switch"]; ok {
+		t.Fatal("one-time dirty-tree-switch signal survived the guarded switch")
+	}
+}
+
+func TestEvaluateUnrelatedCommandDoesNotConsumeDirtyTreeSwitchSignal(t *testing.T) {
+	guard := loadTestGuard(t)
+	repo := initTestRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("one\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, repo, "add", "tracked.txt")
+	gitRun(t, repo, "commit", "-m", "initial")
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("two\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	state := NewState("implementing")
+	state.Signals["dirty-tree-switch"] = Signal{OneTimeUse: true}
+	event := gitBashEvent(t, repo, "git status --short")
+
+	result, checkedSignals, err := Evaluate(guard, state, event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != nil {
+		t.Fatalf("expected unrelated status command to pass, got %+v", result)
+	}
+	state.ConsumeSignals(checkedSignals)
+	if _, ok := state.Signals["dirty-tree-switch"]; !ok {
+		t.Fatal("unrelated command consumed dirty-tree-switch signal")
+	}
+}
+
+func TestEvaluateConsumesOnlyDecisiveOneTimeSignals(t *testing.T) {
+	tests := []struct {
+		name          string
+		when          string
+		signals       map[string]Signal
+		wantRemaining map[string]bool
+	}{
+		{
+			name:    "positive signal enables rule",
+			when:    `tool == "Bash" && "approval" in session.signals`,
+			signals: map[string]Signal{"approval": {OneTimeUse: true}},
+		},
+		{
+			name: "redundant one-time signals jointly override rule",
+			when: `tool == "Bash" && !("first" in session.signals) && !("second" in session.signals)`,
+			signals: map[string]Signal{
+				"first":  {OneTimeUse: true},
+				"second": {OneTimeUse: true},
+			},
+		},
+		{
+			name: "persistent signal makes one-time signal irrelevant",
+			when: `tool == "Bash" && !("persistent" in session.signals) && !("one-time" in session.signals)`,
+			signals: map[string]Signal{
+				"persistent": {OneTimeUse: false},
+				"one-time":   {OneTimeUse: true},
+			},
+			wantRemaining: map[string]bool{"persistent": true, "one-time": true},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			guard, err := NewGuard(nil, []Rule{{When: test.when, Action: "allow"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			state := NewState("implementing")
+			state.Signals = test.signals
+			event := ToolEvent{Tool: "Bash", Input: map[string]any{}, CWD: t.TempDir()}
+			_, checkedSignals, err := Evaluate(guard, state, event)
+			if err != nil {
+				t.Fatal(err)
+			}
+			state.ConsumeSignals(checkedSignals)
+			for name := range test.signals {
+				_, remains := state.Signals[name]
+				if remains != test.wantRemaining[name] {
+					t.Fatalf("signal %q remains = %v, want %v", name, remains, test.wantRemaining[name])
+				}
+			}
+		})
 	}
 }
 

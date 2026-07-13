@@ -450,7 +450,7 @@ func (s *State) ToMap() map[string]any {
 	}
 }
 
-// ConsumeSignals removes one-time-use signals that were checked by matched rules.
+// ConsumeSignals removes one-time-use signals that changed a rule's outcome.
 func (s *State) ConsumeSignals(checked map[string]bool) {
 	for name, sig := range s.Signals {
 		if sig.OneTimeUse && checked[name] {
@@ -1074,7 +1074,7 @@ var signalRefRe = regexp.MustCompile(`(?:session\.signals\.contains\("([^"]+)"\)
 // - Any deny → denied (first deny message used)
 // - No denies, some context → all context messages joined
 // - Nothing matches → allowed (nil)
-// Returns the result, the set of signal names referenced by matched rules, and any error.
+// Returns the result, the one-time signals that changed a rule's outcome, and any error.
 func Evaluate(guard *Guard, state *State, event ToolEvent) (*Result, map[string]bool, error) {
 	return EvaluateVerbose(guard, state, event, nil)
 }
@@ -1187,7 +1187,42 @@ func EvaluateVerbose(guard *Guard, state *State, event ToolEvent, verbose io.Wri
 			}
 			continue // rule doesn't apply (e.g., missing field)
 		}
-		if out.Type() != types.BoolType || !out.Value().(bool) {
+		matches := out.Type() == types.BoolType && out.Value().(bool)
+		oneTimeRefs := make(map[string]bool)
+		for _, match := range signalRefRe.FindAllStringSubmatch(rule.When, -1) {
+			name := match[1]
+			if name == "" {
+				name = match[2]
+			}
+			if signal, ok := state.Signals[name]; ok && signal.OneTimeUse {
+				oneTimeRefs[name] = true
+			}
+		}
+		if out.Type() == types.BoolType && len(oneTimeRefs) > 0 {
+			sessionWithoutSignals := make(map[string]any, len(sessionMap))
+			for name, value := range sessionMap {
+				sessionWithoutSignals[name] = value
+			}
+			remainingSignals := make([]any, 0, len(state.Signals)-len(oneTimeRefs))
+			for name := range state.Signals {
+				if !oneTimeRefs[name] {
+					remainingSignals = append(remainingSignals, name)
+				}
+			}
+			sessionWithoutSignals["signals"] = remainingSignals
+			activationWithoutSignals := make(map[string]any, len(activation))
+			for name, value := range activation {
+				activationWithoutSignals[name] = value
+			}
+			activationWithoutSignals["session"] = sessionWithoutSignals
+			withoutSignals, _, withoutErr := rule.program.Eval(activationWithoutSignals)
+			if withoutErr == nil && withoutSignals.Type() == types.BoolType && withoutSignals.Value().(bool) != matches {
+				for name := range oneTimeRefs {
+					matchedSignals[name] = true
+				}
+			}
+		}
+		if !matches {
 			if verbose != nil {
 				fmt.Fprintf(verbose, "ward:   rule %s: eval=false\n", ruleLabel)
 			}
@@ -1196,11 +1231,6 @@ func EvaluateVerbose(guard *Guard, state *State, event ToolEvent, verbose io.Wri
 
 		if verbose != nil {
 			fmt.Fprintf(verbose, "ward:   rule %s: eval=true → %s\n", ruleLabel, rule.Action)
-		}
-
-		// Rule matched — extract signal references from this rule
-		for _, match := range signalRefRe.FindAllStringSubmatch(rule.When, -1) {
-			matchedSignals[match[1]] = true
 		}
 
 		switch rule.Action {
