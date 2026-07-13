@@ -504,3 +504,40 @@ func TestParseViaOnFallbackParsePath(t *testing.T) {
 		t.Errorf("fallback via = %#v, want [uv]", cmds[0].Via)
 	}
 }
+
+func TestAssignEffectiveDirsThreadsCdChainsAndGitC(t *testing.T) {
+	cases := []struct {
+		command string
+		want    map[string]string // command name -> expected Dir (first occurrence)
+	}{
+		{`cd /c/repo && git add file.txt`, map[string]string{"git": "/c/repo"}},
+		{`cd sub && git add file.txt`, map[string]string{"git": "sub"}},
+		{`cd a && cd b && git status`, map[string]string{"git": "a/b"}},
+		{`cd a && cd /abs && git status`, map[string]string{"git": "/abs"}},
+		{`git -C ../other add file.txt`, map[string]string{"git": "../other"}},
+		{`cd base && git -C nested add file.txt`, map[string]string{"git": "base/nested"}},
+		{`cd "$somewhere" && git add file.txt`, map[string]string{"git": ""}},
+		{`cd - && git add file.txt`, map[string]string{"git": ""}},
+		{`git add file.txt`, map[string]string{"git": ""}},
+		{`cd C:\repo && git status`, map[string]string{"git": "C:/repo"}},
+	}
+	for _, tc := range cases {
+		commands := ParseCommands(tc.command)
+		seen := map[string]string{}
+		for _, cmd := range commands {
+			if _, ok := seen[cmd.Name]; !ok {
+				seen[cmd.Name] = cmd.Dir
+			}
+		}
+		for name, wantDir := range tc.want {
+			gotDir, ok := seen[name]
+			if !ok {
+				t.Errorf("%q: command %q not parsed", tc.command, name)
+				continue
+			}
+			if gotDir != wantDir {
+				t.Errorf("%q: %s Dir = %q, want %q", tc.command, name, gotDir, wantDir)
+			}
+		}
+	}
+}

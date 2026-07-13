@@ -1683,3 +1683,70 @@ func TestNoStageUnownedBuiltinCatchesDirectAndLoopVariableAdds(t *testing.T) {
 		t.Fatalf("owned add must not deny, got %+v", result)
 	}
 }
+
+// A cd-prefixed git command must be evaluated against the repo it TARGETS,
+// not the shell's cwd. Before EffectiveRepoDir, `cd repo && git add ...`
+// issued from outside any repository ran with repo.in_git == false and every
+// git-discipline rule silently skipped (a full bypass); and the same command
+// issued from a DIFFERENT repo was judged against that repo's scope (false
+// positives on legitimately-owned files).
+func TestCdPrefixedGitEvaluatesAgainstTargetRepo(t *testing.T) {
+	rules, err := LoadRulesFromDir("builtin_profiles/git-discipline/rules")
+	if err != nil {
+		t.Fatal(err)
+	}
+	guard, err := NewGuard(nil, rules)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := initTestRepo(t)
+	// unowned.txt exists before the baseline snapshot: pre-existing dirt.
+	// owned.txt never touches the baseline — it stands for a file the agent
+	// created after the session started (the rule is list-based, so it need
+	// not exist on disk).
+	if err := os.WriteFile(filepath.Join(repo, "unowned.txt"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir() // NOT a git repo
+	repoFwd := NormalizePath(repo)
+
+	// Mimic the production hook: repo status comes from the effective dir.
+	prepare := func(command string) (*State, ToolEvent) {
+		event := gitBashEvent(t, outside, command)
+		state := NewState("implementing")
+		status, _ := ComputeRepoStatus(EffectiveRepoDir(event))
+		state.SyncRepo(status)
+		state.TouchedFiles = appendUniquePath(state.TouchedFiles, "owned.txt")
+		return state, event
+	}
+
+	// Bypass closed: staging an unowned file through a cd prefix denies.
+	state, event := prepare(`cd ` + repoFwd + ` && git add unowned.txt`)
+	result, _, err := Evaluate(guard, state, event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result == nil || result.Action != "deny" {
+		t.Fatalf("cd-prefixed unowned add must deny, got %+v", result)
+	}
+
+	// Same through git -C.
+	state, event = prepare(`git -C ` + repoFwd + ` add unowned.txt`)
+	result, _, err = Evaluate(guard, state, event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result == nil || result.Action != "deny" {
+		t.Fatalf("git -C unowned add must deny, got %+v", result)
+	}
+
+	// False positive closed: a touched file stages fine through a cd prefix.
+	state, event = prepare(`cd ` + repoFwd + ` && git add owned.txt`)
+	result, _, err = Evaluate(guard, state, event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != nil && result.Action == "deny" {
+		t.Fatalf("cd-prefixed owned add must not deny, got %+v", result)
+	}
+}

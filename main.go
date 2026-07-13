@@ -451,7 +451,7 @@ func cmdEval() {
 	if key.ActorKey != MainActorKey {
 		initialPhase = UninitializedPhase
 	}
-	repoStatus, _ := ComputeRepoStatus(event.CWD)
+	repoStatus, _ := ComputeRepoStatus(EffectiveRepoDir(event))
 
 	var verboseWriter io.Writer
 	if verbose {

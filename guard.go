@@ -1013,9 +1013,10 @@ func EvaluateVerbose(guard *Guard, state *State, event ToolEvent, verbose io.Wri
 			canonicalToolName(event.Tool), state.Phase, len(state.History))
 	}
 
-	// Normalize input paths
+	// Normalize input paths. Repo context follows the directory the event's
+	// git commands actually target (cd prefixes / git -C), not the shell cwd.
 	normalizedInput := NormalizeInput(event.Input)
-	enrichCommandRepoContext(normalizedInput, event.CWD)
+	enrichCommandRepoContext(normalizedInput, EffectiveRepoDir(event))
 
 	// Determine which facts are referenced by any rule
 	neededFacts := make(map[string]bool)
@@ -1051,7 +1052,7 @@ func EvaluateVerbose(guard *Guard, state *State, event ToolEvent, verbose io.Wri
 		"input":   normalizedInput,
 		"session": sessionMap,
 		"facts":   factsMap,
-		"repo":    repoActivation(event.CWD, state, verbose),
+		"repo":    repoActivation(EffectiveRepoDir(event), state, verbose),
 	}
 
 	// Collect all matching results: deny-is-veto, context accumulates

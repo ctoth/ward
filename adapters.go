@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // AgentType identifies which AI coding agent sent the hook event.
@@ -36,6 +37,7 @@ type ToolEvent struct {
 	AgentType string // role metadata; never part of the storage key
 	EventType string // "pre_tool", "post_tool"
 	CWD       string
+	Parsed    []ParsedCommand // typed parse of Bash commands (mirrors Input["commands"])
 }
 
 // DetectAndParse auto-detects which agent sent the JSON and parses it.
@@ -82,13 +84,16 @@ func DetectAndParse(data []byte) (ToolEvent, AgentType, error) {
 }
 
 // enrichBashCommands adds parsed shell commands to Bash tool events.
-// input.commands is a list of maps with "name" and "full" keys.
+// input.commands is a list of maps with "name" and "full" keys; the typed
+// []ParsedCommand is kept on the event for evaluation-side logic (effective
+// repo dir) that should not round-trip through the CEL map encoding.
 func enrichBashCommands(event *ToolEvent) {
 	if event.Tool != "Bash" && event.Tool != "local_shell" {
 		return
 	}
 	if parts, ok := stringSlice(event.Input["command_argv"]); ok && len(parts) > 0 {
-		event.Input["commands"] = parsedCommandMaps(parseArgvCommand(parts))
+		event.Parsed = parseArgvCommand(parts)
+		event.Input["commands"] = parsedCommandMaps(event.Parsed)
 		return
 	}
 
@@ -96,7 +101,31 @@ func enrichBashCommands(event *ToolEvent) {
 	if !ok || cmd == "" {
 		return
 	}
-	event.Input["commands"] = parsedCommandMaps(ParseCommands(cmd))
+	event.Parsed = ParseCommands(cmd)
+	event.Input["commands"] = parsedCommandMaps(event.Parsed)
+}
+
+// EffectiveRepoDir is the directory the event's git activity actually targets:
+// the cd/-C effective dir of the first git command, resolved against the event
+// cwd. Events without git commands (or without a resolvable dir) evaluate at
+// the event cwd, as before. This closes the gap where `cd repo && git ...`
+// issued from outside any repository was evaluated with repo.in_git == false —
+// skipping every git-discipline rule — and the inverse, where it was judged
+// against the WRONG repository's scope.
+func EffectiveRepoDir(event ToolEvent) string {
+	for _, cmd := range event.Parsed {
+		if cmd.Name != "git" {
+			continue
+		}
+		if cmd.Dir == "" {
+			return event.CWD
+		}
+		if isAbsShellPath(cmd.Dir) {
+			return cmd.Dir
+		}
+		return strings.TrimSuffix(NormalizePath(event.CWD), "/") + "/" + cmd.Dir
+	}
+	return event.CWD
 }
 
 func parseClaude(raw map[string]any, eventName string) (ToolEvent, AgentType, error) {
@@ -353,6 +382,7 @@ func parsedCommandMaps(parsed []ParsedCommand) []any {
 			"full":           p.Full,
 			"args":           args,
 			"via":            via,
+			"dir":            p.Dir,
 			"git_subcommand": p.GitSubcommand,
 			"git_args":       gitArgs,
 			"git_category":   p.GitCategory,

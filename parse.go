@@ -16,6 +16,14 @@ type ParsedCommand struct {
 	GitArgs       []string
 	GitCategory   string   // query, stage, commit, switch, restore, integrate, push, tag, history_rewrite, workspace_destructive
 	GitPaths      []string // repo-relative path operands, when syntactically recoverable
+	// Dir is the directory this command effectively runs in, relative to the
+	// event cwd unless absolute: preceding `cd <path>` commands in the same
+	// shell string compose into it, and git's global `-C <path>` composes on
+	// top. Empty means "the event cwd" — either no cd/-C preceded the
+	// command, or the target was not statically resolvable (`cd -`,
+	// `cd "$dir"`), in which case ward falls back to the event cwd rather
+	// than guessing.
+	Dir string
 }
 
 // ParseCommands extracts the actual commands from a shell command string.
@@ -92,7 +100,99 @@ func ParseCommands(cmdStr string) []ParsedCommand {
 		return nil
 	}
 
+	return assignEffectiveDirs(commands)
+}
+
+// assignEffectiveDirs threads `cd` chains through the ordered command list so
+// each command carries the directory it actually runs in. A `cd` whose target
+// is not statically resolvable (no argument, `-`, or an unexpanded variable)
+// poisons the chain: subsequent commands get Dir == "" (the event cwd) rather
+// than a guess. Subshell scoping is deliberately over-approximated — a `cd`
+// inside `( ... )` is treated as affecting later commands, which errs toward
+// evaluating against the repo the agent named rather than missing it.
+func assignEffectiveDirs(commands []ParsedCommand) []ParsedCommand {
+	chainDir := ""
+	known := true
+	for i := range commands {
+		cmd := &commands[i]
+		effective := ""
+		if known {
+			effective = chainDir
+		}
+		if cmd.Name == "git" {
+			if cDir := gitGlobalCDir(cmd.Args); cDir != "" {
+				effective = joinShellDir(effective, cDir)
+			}
+		}
+		cmd.Dir = effective
+		if cmd.Name == "cd" {
+			target := firstNonFlagArg(cmd.Args)
+			if target == "" || target == "-" || strings.ContainsAny(target, "$`") {
+				chainDir = ""
+				known = false
+				continue
+			}
+			next := chainDir
+			if !known {
+				next = ""
+			}
+			chainDir = joinShellDir(next, target)
+			known = true
+		}
+	}
 	return commands
+}
+
+// gitGlobalCDir composes git's global `-C <path>` options (which git applies
+// in sequence, later relative paths resolving against earlier ones) that
+// appear before the subcommand.
+func gitGlobalCDir(args []string) string {
+	dir := ""
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "":
+			continue
+		case arg == "-C":
+			if i+1 < len(args) {
+				dir = joinShellDir(dir, args[i+1])
+			}
+			i++
+		case arg == "-c" || arg == "--git-dir" || arg == "--work-tree" || arg == "--namespace":
+			i++
+		case strings.HasPrefix(arg, "-"):
+			continue
+		default:
+			return dir // reached the subcommand
+		}
+	}
+	return dir
+}
+
+func firstNonFlagArg(args []string) string {
+	for _, arg := range args {
+		if arg == "" || strings.HasPrefix(arg, "-") {
+			continue
+		}
+		return arg
+	}
+	return ""
+}
+
+// joinShellDir composes a relative-or-absolute path onto a base chain dir.
+func joinShellDir(base, next string) string {
+	next = NormalizePath(next)
+	if base == "" || isAbsShellPath(next) {
+		return next
+	}
+	return strings.TrimSuffix(base, "/") + "/" + next
+}
+
+func isAbsShellPath(p string) bool {
+	if strings.HasPrefix(p, "/") || strings.HasPrefix(p, "~") {
+		return true
+	}
+	return len(p) >= 3 && p[1] == ':' && p[2] == '/'
 }
 
 func annotateParsedCommand(cmd ParsedCommand) ParsedCommand {
