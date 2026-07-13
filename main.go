@@ -243,6 +243,9 @@ Usage:
   ward set <phase> --hook-input < event.json
 
 The session and actor can also be provided via WARD_SESSION and WARD_ACTOR_ID.
+Selecting an actor binds it to the session, so later CLI commands and hook
+events that omit actor identity continue to use that actor. An explicit
+--agent, WARD_ACTOR_ID, or host-supplied agent_id takes precedence.
 
 Example:
   ward set implementing --session abc`
@@ -850,15 +853,24 @@ func sessionFromArgs() string {
 }
 
 func stateKeyFromCommandArgs(args []string, processSession, cwd string) (StateKey, error) {
+	sessionKey := resolveCommandSession(args, processSession, cwd)
 	actorKey := flagValue(args, "--agent")
 	if actorKey == "" {
 		actorKey = os.Getenv(envActorID)
 	}
 	if actorKey == "" {
+		boundActor, err := loadActiveActor(sessionKey)
+		if err == nil {
+			actorKey = boundActor
+		} else if !os.IsNotExist(err) {
+			return StateKey{}, fmt.Errorf("load active actor binding: %w", err)
+		}
+	}
+	if actorKey == "" {
 		actorKey = MainActorKey
 	}
 	key := StateKey{
-		SessionKey: resolveCommandSession(args, processSession, cwd),
+		SessionKey: sessionKey,
 		ActorKey:   actorKey,
 	}
 	if err := validateStateKey(key); err != nil {
@@ -869,13 +881,28 @@ func stateKeyFromCommandArgs(args []string, processSession, cwd string) (StateKe
 
 func commandStateKey() (StateKey, error) {
 	wd, _ := os.Getwd()
-	return stateKeyFromCommandArgs(os.Args, resolveSessionFromProcessTree(), wd)
+	key, err := stateKeyFromCommandArgs(os.Args, resolveSessionFromProcessTree(), wd)
+	if err != nil {
+		return StateKey{}, err
+	}
+	if err := bindActiveActor(key); err != nil {
+		return StateKey{}, fmt.Errorf("bind active actor: %w", err)
+	}
+	return key, nil
 }
 
 func stateKeyFromHook(event ToolEvent) (StateKey, error) {
 	actorKey := event.AgentID
 	if actorKey == "" {
 		actorKey = os.Getenv(envActorID)
+	}
+	if actorKey == "" {
+		boundActor, err := loadActiveActor(event.SessionID)
+		if err == nil {
+			actorKey = boundActor
+		} else if !os.IsNotExist(err) {
+			return StateKey{}, fmt.Errorf("load active actor binding: %w", err)
+		}
 	}
 	if actorKey == "" {
 		actorKey = MainActorKey

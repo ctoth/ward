@@ -181,6 +181,20 @@ For interactive commands such as `ward adopt`, an explicit `--session` or
 `CODEX_THREAD_ID` when neither is set, so the command and the hook share the
 same session state.
 
+For CLI-launched workers whose hook payload omits `agent_id`, select the actor
+once with `--agent` (or `WARD_ACTOR_ID`):
+
+```bash
+ward set integrator --session "$CODEX_THREAD_ID" --agent promotion-worker
+ward allow dirty-tree-switch --session "$CODEX_THREAD_ID"
+```
+
+Ward binds `promotion-worker` as that session's active actor. Later state
+commands and hooks without actor identity inherit the binding, so the signal
+and the guarded operation use the same actor. A host-supplied `agent_id`,
+`WARD_ACTOR_ID`, or a new explicit `--agent` always takes precedence. Use
+`--agent main` to select the main actor again.
+
 ## Example rules
 
 ### Safety: block dangerous commands

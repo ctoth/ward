@@ -23,10 +23,15 @@
 | Inspect `cmdAllow`, `stateKeyFromCommandArgs`, and `stateKeyFromHook` | 1-3 | Commands honor `--agent`; hooks cannot see that choice later | Signal-rule-only explanation | 3 |
 | Inspect the live promotion receipts | 2-3 | Manual evaluation consumed the first signal; the second attempt skipped manual evaluation and was still denied | Consumption as the sole cause | 3 |
 | Inspect actor precedence tests | 3 | Tests cover payload/env actor identity but not persistent CLI command-to-hook binding | Existing coverage completeness | 3 |
+| Add `TestCommandActorBindingCarriesIntoActorlessHook` | 3 | Red: command resolved `cli-worker`; the following actor-less hook and command resolved `main` | Remaining competing theories | 3 |
 
 ## Current Best Theory
 
 Theory 3 explains every receipt. Ward exposes actor-scoped CLI commands but does not durably bind their selected actor to later hook processes when the host omits `agent_id`. Requiring callers to set `WARD_ACTOR_ID` before starting Codex is a workaround, not a complete CLI actor surface.
+
+Confirmed by the red test. The implementation now persists the selected actor
+inside the session family, consults it only after payload/environment identity,
+and clears or retires it with the existing actor/session lifecycle.
 
 ## Required Fix
 
@@ -40,3 +45,12 @@ Persist the actor selected by Ward's state-mutating CLI commands as the active a
 - Selecting `main` restores main-actor resolution.
 - Actor/session lifecycle tests and the full Go suite pass.
 - The installed Ward binary is rebuilt and the original dirty-tree promotion succeeds with one signal and no manual `ward eval` preflight.
+
+## Verification Status
+
+- Targeted command-to-hook binding test: pass.
+- Targeted actor stop and SessionEnd/resume lifecycle test: pass.
+- `go vet ./...`: pass.
+- `go test ./... -count=1`: pass in 43.714 seconds.
+- `go test -race ./... -count=1`: pass in 48.740 seconds.
+- Install and live promotion proof: pending.

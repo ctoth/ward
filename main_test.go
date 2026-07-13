@@ -101,6 +101,55 @@ func TestMainActorCompatibilityWhenNoActorIsSupplied(t *testing.T) {
 	}
 }
 
+func TestCommandActorBindingCarriesIntoActorlessHook(t *testing.T) {
+	session := "command-hook-binding-" + t.Name()
+	t.Cleanup(func() { _ = PurgeSessionFamily(session) })
+	t.Setenv(envActorID, "")
+
+	originalArgs := os.Args
+	t.Cleanup(func() { os.Args = originalArgs })
+	os.Args = []string{
+		"ward", "set", "integrator", "--session", session, "--agent", "cli-worker",
+	}
+	commandKey, err := commandStateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if commandKey.ActorKey != "cli-worker" {
+		t.Fatalf("command actor = %q, want cli-worker", commandKey.ActorKey)
+	}
+
+	hookKey, err := stateKeyFromHook(ToolEvent{SessionID: session})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hookKey != commandKey {
+		t.Fatalf("actor-less hook key %#v != preceding command key %#v", hookKey, commandKey)
+	}
+	os.Args = []string{"ward", "allow", "approved", "--session", session}
+	inheritedCommandKey, err := commandStateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inheritedCommandKey != commandKey {
+		t.Fatalf("actor-less command key %#v != active command key %#v", inheritedCommandKey, commandKey)
+	}
+
+	os.Args = []string{
+		"ward", "set", "foreman", "--session", session, "--agent", MainActorKey,
+	}
+	if _, err := commandStateKey(); err != nil {
+		t.Fatal(err)
+	}
+	hookKey, err = stateKeyFromHook(ToolEvent{SessionID: session})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hookKey.ActorKey != MainActorKey {
+		t.Fatalf("main rebind resolved actor %q", hookKey.ActorKey)
+	}
+}
+
 func TestHookInputInitializationUsesRealClaudeIdentity(t *testing.T) {
 	session := "hook-init-" + t.Name()
 	key := StateKey{SessionKey: session, ActorKey: "agent-real"}
@@ -239,6 +288,9 @@ func TestSubagentStopDeletesOnlyWorkerAndSessionEndDeletesFamily(t *testing.T) {
 	if err := registerSession(registryPID, session, "C:/repo"); err != nil {
 		t.Fatal(err)
 	}
+	if err := bindActiveActor(workerA); err != nil {
+		t.Fatal(err)
+	}
 
 	stopInput := []byte(`{"hook_event_name":"SubagentStop","session_id":"` + session + `","agent_id":"worker-a"}`)
 	if err := DeleteActorFromHookInput(stopInput); err != nil {
@@ -247,10 +299,16 @@ func TestSubagentStopDeletesOnlyWorkerAndSessionEndDeletesFamily(t *testing.T) {
 	if _, err := LoadState(workerA); !os.IsNotExist(err) {
 		t.Fatalf("worker A still exists: %v", err)
 	}
+	if _, err := loadActiveActor(session); !os.IsNotExist(err) {
+		t.Fatalf("SubagentStop retained worker A binding: %v", err)
+	}
 	for _, key := range []StateKey{mainKey, workerB} {
 		if _, err := LoadState(key); err != nil {
 			t.Fatalf("SubagentStop deleted %#v: %v", key, err)
 		}
+	}
+	if err := bindActiveActor(workerB); err != nil {
+		t.Fatal(err)
 	}
 
 	endInput := []byte(`{"hook_event_name":"SessionEnd","session_id":"` + session + `"}`)
@@ -285,6 +343,13 @@ func TestSubagentStopDeletesOnlyWorkerAndSessionEndDeletesFamily(t *testing.T) {
 	}
 	if _, err := LoadState(workerB); err != nil {
 		t.Fatalf("resurrection lost sibling actor: %v", err)
+	}
+	hookKey, err := stateKeyFromHook(ToolEvent{SessionID: session})
+	if err != nil {
+		t.Fatalf("resurrection lost active actor binding: %v", err)
+	}
+	if hookKey.ActorKey != workerB.ActorKey {
+		t.Fatalf("resurrected hook actor = %q, want %q", hookKey.ActorKey, workerB.ActorKey)
 	}
 }
 

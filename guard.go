@@ -546,6 +546,79 @@ func statePath(key StateKey) string {
 	return filepath.Join(sessionFamilyPath(key.SessionKey), "actors", hashedStateComponent(key.ActorKey)+".json")
 }
 
+const activeActorBindingLockKey = "\x00active-actor-binding"
+
+func activeActorBindingPath(sessionKey string) string {
+	return filepath.Join(sessionFamilyPath(sessionKey), "active-actor")
+}
+
+func bindActiveActor(key StateKey) error {
+	if err := validateStateKey(key); err != nil {
+		return err
+	}
+	lockKey := StateKey{SessionKey: key.SessionKey, ActorKey: activeActorBindingLockKey}
+	unlock, err := lockActorState(lockKey)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	return atomicWriteFile(activeActorBindingPath(key.SessionKey), []byte(key.ActorKey+"\n"), 0o644)
+}
+
+func loadActiveActor(sessionKey string) (string, error) {
+	lockKey := StateKey{SessionKey: sessionKey, ActorKey: activeActorBindingLockKey}
+	if err := validateStateKey(lockKey); err != nil {
+		return "", err
+	}
+	unlock, err := lockActorState(lockKey)
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
+
+	path := activeActorBindingPath(sessionKey)
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) && restoreEndedFamily(sessionKey) {
+		data, err = os.ReadFile(path)
+	}
+	if err != nil {
+		return "", err
+	}
+	actorKey := strings.TrimSpace(string(data))
+	if err := validateStateKey(StateKey{SessionKey: sessionKey, ActorKey: actorKey}); err != nil {
+		return "", fmt.Errorf("invalid active actor binding: %w", err)
+	}
+	return actorKey, nil
+}
+
+func clearActiveActorBinding(key StateKey) error {
+	lockKey := StateKey{SessionKey: key.SessionKey, ActorKey: activeActorBindingLockKey}
+	if err := validateStateKey(lockKey); err != nil {
+		return err
+	}
+	unlock, err := lockActorState(lockKey)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	path := activeActorBindingPath(key.SessionKey)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if strings.TrimSpace(string(data)) != key.ActorKey {
+		return nil
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
 func legacyStatePath(sessionKey string) string {
 	return filepath.Join(stateDir(), sessionKey+".json")
 }
@@ -800,11 +873,14 @@ func DeleteActorState(key StateKey) error {
 
 	if _, err := readActorState(key); err != nil {
 		if os.IsNotExist(err) {
-			return nil
+			return clearActiveActorBinding(key)
 		}
 		return err
 	}
 	if err := os.Remove(statePath(key)); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err := clearActiveActorBinding(key); err != nil {
 		return err
 	}
 	_ = os.Remove(filepath.Dir(statePath(key)))
