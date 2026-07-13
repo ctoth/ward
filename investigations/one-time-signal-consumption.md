@@ -47,4 +47,9 @@ does not consume an irrelevant one-time signal masked by a persistent signal.
   process timeout expired at 58.524 seconds without a test failure; the bounded
   rerun used 75 seconds.
 - `go test -race ./... -count=1`: pass in 63.136 seconds.
-- Reinstall and live one-time proof: pending.
+- Installed binary reports exact VCS revision
+  `491f54c9882a27aa59cd2edd02d8c3c289bd1008`; Codex hooks were refreshed.
+- Live proof on the dirty `mushy-peas` integration checkout: the first
+  `git merge --ff-only HEAD` was allowed, actor state then contained
+  `"signals": {}`, and a second identical command without another grant was
+  denied by `no-dirty-tree-switch`.
