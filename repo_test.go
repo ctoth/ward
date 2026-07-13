@@ -78,6 +78,48 @@ func TestStateSyncRepoAndTouchedFiles(t *testing.T) {
 	}
 }
 
+func TestSyncRepoParksAndRestoresScopeAcrossRootSwitch(t *testing.T) {
+	state := NewState("implementing")
+	repoA := &RepoStatus{InGit: true, Root: "C:/repo-a", DirtyPaths: []string{"pre-a.txt"}}
+	repoB := &RepoStatus{InGit: true, Root: "C:/repo-b", DirtyPaths: []string{"pre-b.txt"}}
+
+	state.SyncRepo(repoA)
+	state.Update("Edit", map[string]any{"file_path": "C:/repo-a/agent-a.txt"})
+	state.AdoptedPaths = []string{"adopted-a.txt"}
+
+	// Switching repos must PARK repo-a's scope, not destroy it — an agent
+	// that greps a sibling repo mid-task must not lose its commit authority.
+	state.SyncRepo(repoB)
+	if len(state.TouchedFiles) != 0 {
+		t.Fatalf("repo-b inherited repo-a touched files: %#v", state.TouchedFiles)
+	}
+	if len(state.AdoptedPaths) != 0 {
+		t.Fatalf("repo-b inherited repo-a adoptions: %#v", state.AdoptedPaths)
+	}
+	if len(state.BaselineDirtyPaths) != 1 || state.BaselineDirtyPaths[0] != "pre-b.txt" {
+		t.Fatalf("unexpected repo-b baseline: %#v", state.BaselineDirtyPaths)
+	}
+	state.Update("Edit", map[string]any{"file_path": "C:/repo-b/agent-b.txt"})
+
+	// Returning restores repo-a's scope intact.
+	state.SyncRepo(repoA)
+	if len(state.TouchedFiles) != 1 || state.TouchedFiles[0] != "agent-a.txt" {
+		t.Fatalf("repo-a touched files not restored: %#v", state.TouchedFiles)
+	}
+	if len(state.AdoptedPaths) != 1 || state.AdoptedPaths[0] != "adopted-a.txt" {
+		t.Fatalf("repo-a adoptions not restored: %#v", state.AdoptedPaths)
+	}
+	if len(state.BaselineDirtyPaths) != 1 || state.BaselineDirtyPaths[0] != "pre-a.txt" {
+		t.Fatalf("repo-a baseline not restored: %#v", state.BaselineDirtyPaths)
+	}
+
+	// And repo-b's scope was parked in turn.
+	state.SyncRepo(repoB)
+	if len(state.TouchedFiles) != 1 || state.TouchedFiles[0] != "agent-b.txt" {
+		t.Fatalf("repo-b touched files not restored: %#v", state.TouchedFiles)
+	}
+}
+
 func TestStateToMapIncludesGrantPaths(t *testing.T) {
 	state := NewState("implementing")
 	state.AdoptedPaths = []string{"src/app.py"}

@@ -692,7 +692,7 @@ func TestStatePersistence(t *testing.T) {
 
 func TestActorStateIsolationWithinSessionFamily(t *testing.T) {
 	session := "actor-isolation-" + t.Name()
-	t.Cleanup(func() { _ = DeleteSessionFamily(session) })
+	t.Cleanup(func() { _ = PurgeSessionFamily(session) })
 
 	mainKey := StateKey{SessionKey: session, ActorKey: MainActorKey}
 	scoutKey := StateKey{SessionKey: session, ActorKey: "worker-a"}
@@ -753,7 +753,7 @@ func TestActorStateIsolationWithinSessionFamily(t *testing.T) {
 
 func TestLegacyMigrationOnlyToMainIsCompleteAndIdempotent(t *testing.T) {
 	session := "legacy-migration-" + t.Name()
-	t.Cleanup(func() { _ = DeleteSessionFamily(session) })
+	t.Cleanup(func() { _ = PurgeSessionFamily(session) })
 
 	legacy := NewState("foreman")
 	legacy.History = []string{"Read", "Bash"}
@@ -823,7 +823,7 @@ func TestLegacyMigrationOnlyToMainIsCompleteAndIdempotent(t *testing.T) {
 func TestActorStateRejectsMalformedOrCollidingIdentity(t *testing.T) {
 	session := "identity-validation-" + t.Name()
 	key := StateKey{SessionKey: session, ActorKey: "worker-a"}
-	t.Cleanup(func() { _ = DeleteSessionFamily(session) })
+	t.Cleanup(func() { _ = PurgeSessionFamily(session) })
 
 	if err := os.MkdirAll(filepath.Dir(statePath(key)), 0o755); err != nil {
 		t.Fatal(err)
@@ -847,7 +847,7 @@ func TestActorStateRejectsMalformedOrCollidingIdentity(t *testing.T) {
 
 func TestActorUpdatesAreRaceSafeAndSameActorIsSerialized(t *testing.T) {
 	session := "actor-race-" + t.Name()
-	t.Cleanup(func() { _ = DeleteSessionFamily(session) })
+	t.Cleanup(func() { _ = PurgeSessionFamily(session) })
 
 	keys := []StateKey{
 		{SessionKey: session, ActorKey: "worker-a"},
@@ -1632,5 +1632,54 @@ func TestUvRunPythonAllowedViaWrapperChain(t *testing.T) {
 		if result != nil && result.Action == "deny" {
 			t.Errorf("%q should not deny, got: %s", cmd, result.Message)
 		}
+	}
+}
+
+// The no-stage-unowned builtin must fire for a direct unowned add (positive)
+// and must ALSO fire when the pathspec is a shell variable inside a loop —
+// observed in the field: `for f in ...; do git add "$f"; done` staged 18
+// unowned paths without a deny.
+func TestNoStageUnownedBuiltinCatchesDirectAndLoopVariableAdds(t *testing.T) {
+	rules, err := LoadRulesFromDir("builtin_profiles/git-discipline/rules")
+	if err != nil {
+		t.Fatal(err)
+	}
+	guard, err := NewGuard(nil, rules)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := initTestRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "unowned.txt"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	state := NewState("implementing")
+	state.TouchedFiles = []string{"owned.txt"}
+
+	direct := gitBashEvent(t, repo, "git add unowned.txt")
+	result, _, err := Evaluate(guard, state, direct)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result == nil || result.Action != "deny" {
+		t.Fatalf("direct unowned add must deny, got %+v", result)
+	}
+
+	loop := gitBashEvent(t, repo, `for f in unowned.txt; do git add "$f" 2>/dev/null || echo "BLOCKED: $f"; done`)
+	result, _, err = Evaluate(guard, state, loop)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result == nil || result.Action != "deny" {
+		t.Fatalf("loop-variable unowned add must deny, got %+v", result)
+	}
+
+	owned := gitBashEvent(t, repo, "git add owned.txt")
+	result, _, err = Evaluate(guard, state, owned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != nil && result.Action == "deny" {
+		t.Fatalf("owned add must not deny, got %+v", result)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"os"
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestHookAndCommandResolveIdenticalStateKeys(t *testing.T) {
@@ -103,7 +104,7 @@ func TestMainActorCompatibilityWhenNoActorIsSupplied(t *testing.T) {
 func TestHookInputInitializationUsesRealClaudeIdentity(t *testing.T) {
 	session := "hook-init-" + t.Name()
 	key := StateKey{SessionKey: session, ActorKey: "agent-real"}
-	t.Cleanup(func() { _ = DeleteSessionFamily(session) })
+	t.Cleanup(func() { _ = PurgeSessionFamily(session) })
 	t.Setenv(envActorID, "environment-worker")
 
 	input := []byte(`{"hook_event_name":"SubagentStart","session_id":"` + session + `","agent_id":"agent-real","agent_type":"scout"}`)
@@ -125,7 +126,7 @@ func TestHookInputInitializationUsesRealClaudeIdentity(t *testing.T) {
 
 func TestHookInputInitializationCannotFallBackToMain(t *testing.T) {
 	session := "hook-init-main-" + t.Name()
-	t.Cleanup(func() { _ = DeleteSessionFamily(session) })
+	t.Cleanup(func() { _ = PurgeSessionFamily(session) })
 	t.Setenv(envActorID, "")
 
 	input := []byte(`{"hook_event_name":"SubagentStart","session_id":"` + session + `","agent_type":"scout"}`)
@@ -142,7 +143,7 @@ func TestSubagentStartInitializesRealWorkerIdempotentlyWithoutMutatingOtherActor
 	mainKey := StateKey{SessionKey: session, ActorKey: MainActorKey}
 	workerKey := StateKey{SessionKey: session, ActorKey: "worker-a"}
 	siblingKey := StateKey{SessionKey: session, ActorKey: "worker-b"}
-	t.Cleanup(func() { _ = DeleteSessionFamily(session) })
+	t.Cleanup(func() { _ = PurgeSessionFamily(session) })
 	t.Setenv(envActorID, "")
 
 	mainState := NewState("foreman")
@@ -218,7 +219,10 @@ func TestSubagentStopDeletesOnlyWorkerAndSessionEndDeletesFamily(t *testing.T) {
 	mainKey := StateKey{SessionKey: session, ActorKey: MainActorKey}
 	workerA := StateKey{SessionKey: session, ActorKey: "worker-a"}
 	workerB := StateKey{SessionKey: session, ActorKey: "worker-b"}
-	t.Cleanup(func() { _ = DeleteSessionFamily(session) })
+	t.Cleanup(func() {
+		_ = PurgeSessionFamily(session)
+		_ = os.RemoveAll(endedFamilyPath(session))
+	})
 
 	for key, phase := range map[StateKey]string{
 		mainKey: "foreman", workerA: "scout", workerB: "experiment-worker",
@@ -253,10 +257,13 @@ func TestSubagentStopDeletesOnlyWorkerAndSessionEndDeletesFamily(t *testing.T) {
 	if err := DeleteSessionFromHookInput(endInput); err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []StateKey{mainKey, workerB} {
-		if _, err := LoadState(key); !os.IsNotExist(err) {
-			t.Fatalf("SessionEnd retained %#v: %v", key, err)
-		}
+	// SessionEnd retires the family to a tombstone: the live family dir is
+	// gone, but a resumed session (same id) resurrects it on the next load.
+	if _, err := os.Stat(sessionFamilyPath(session)); !os.IsNotExist(err) {
+		t.Fatalf("SessionEnd left live family in place: %v", err)
+	}
+	if _, err := os.Stat(endedFamilyPath(session)); err != nil {
+		t.Fatalf("SessionEnd did not leave a tombstone: %v", err)
 	}
 	if _, err := os.Stat(legacyStatePath(session)); !os.IsNotExist(err) {
 		t.Fatalf("SessionEnd retained legacy state: %v", err)
@@ -264,13 +271,52 @@ func TestSubagentStopDeletesOnlyWorkerAndSessionEndDeletesFamily(t *testing.T) {
 	if _, err := lookupSessionByPID(registryPID); err == nil {
 		t.Fatal("SessionEnd retained PID registry entry")
 	}
+
+	// Resume: loading any actor state resurrects the retired family intact.
+	resumed, err := LoadState(mainKey)
+	if err != nil {
+		t.Fatalf("resume after SessionEnd failed to resurrect state: %v", err)
+	}
+	if resumed.Phase != "foreman" {
+		t.Fatalf("resurrected state lost phase, got %q", resumed.Phase)
+	}
+	if _, err := os.Stat(endedFamilyPath(session)); !os.IsNotExist(err) {
+		t.Fatalf("tombstone survived resurrection: %v", err)
+	}
+	if _, err := LoadState(workerB); err != nil {
+		t.Fatalf("resurrection lost sibling actor: %v", err)
+	}
+}
+
+func TestEndedFamilySweepPurgesExpiredTombstones(t *testing.T) {
+	session := "sweep-" + t.Name()
+	key := StateKey{SessionKey: session, ActorKey: MainActorKey}
+	t.Cleanup(func() {
+		_ = PurgeSessionFamily(session)
+		_ = os.RemoveAll(endedFamilyPath(session))
+	})
+	if err := SaveState(key, NewState("planning")); err != nil {
+		t.Fatal(err)
+	}
+	if err := DeleteSessionFamily(session); err != nil {
+		t.Fatal(err)
+	}
+	ended := endedFamilyPath(session)
+	expired := time.Now().Add(-endedFamilyTTL - time.Hour)
+	if err := os.Chtimes(ended, expired, expired); err != nil {
+		t.Fatal(err)
+	}
+	sweepEndedFamilies()
+	if _, err := os.Stat(ended); !os.IsNotExist(err) {
+		t.Fatalf("expired tombstone survived sweep: %v", err)
+	}
 }
 
 func TestUninitializedWorkerCannotMutateMain(t *testing.T) {
 	session := "uninitialized-" + t.Name()
 	mainKey := StateKey{SessionKey: session, ActorKey: MainActorKey}
 	workerKey := StateKey{SessionKey: session, ActorKey: "missing-worker"}
-	t.Cleanup(func() { _ = DeleteSessionFamily(session) })
+	t.Cleanup(func() { _ = PurgeSessionFamily(session) })
 
 	if err := SaveState(mainKey, NewState("foreman")); err != nil {
 		t.Fatal(err)

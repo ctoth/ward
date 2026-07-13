@@ -304,6 +304,20 @@ type State struct {
 	TouchedSinceCommit []string          `json:"touched_since_commit,omitempty"`
 	AdoptedPaths       []string          `json:"adopted_paths,omitempty"`
 	DiscardablePaths   []string          `json:"discardable_paths,omitempty"`
+	// RepoScopes preserves per-repo tracking when the actor's tool calls move
+	// between git repositories. The flat fields above always describe the
+	// CURRENT RepoRoot; scopes for other roots are parked here and restored
+	// when the actor returns, instead of being destroyed on every switch.
+	RepoScopes map[string]*RepoScope `json:"repo_scopes,omitempty"`
+}
+
+// RepoScope is one repository's parked tracking state.
+type RepoScope struct {
+	BaselineDirtyPaths []string `json:"baseline_dirty_paths,omitempty"`
+	TouchedFiles       []string `json:"touched_files,omitempty"`
+	TouchedSinceCommit []string `json:"touched_since_commit,omitempty"`
+	AdoptedPaths       []string `json:"adopted_paths,omitempty"`
+	DiscardablePaths   []string `json:"discardable_paths,omitempty"`
 }
 
 func NewState(phase string) *State {
@@ -347,16 +361,47 @@ func (s *State) SyncRepo(status *RepoStatus) {
 		return
 	}
 	root := NormalizePath(status.Root)
-	if s.RepoRoot == "" || s.RepoRoot != root {
-		s.RepoRoot = root
-		s.BaselineDirtyPaths = uniquePaths(status.DirtyPaths)
-		s.TouchedFiles = nil
-		s.TouchedSinceCommit = nil
+	if s.RepoRoot == root {
+		if s.BaselineDirtyPaths == nil {
+			s.BaselineDirtyPaths = []string{}
+		}
 		return
 	}
-	if s.BaselineDirtyPaths == nil {
-		s.BaselineDirtyPaths = []string{}
+
+	// Park the outgoing repo's scope (if any) so returning to it later
+	// restores tracking instead of rebaselining the agent's own edits as
+	// pre-existing dirt.
+	if s.RepoRoot != "" {
+		if s.RepoScopes == nil {
+			s.RepoScopes = make(map[string]*RepoScope)
+		}
+		s.RepoScopes[s.RepoRoot] = &RepoScope{
+			BaselineDirtyPaths: s.BaselineDirtyPaths,
+			TouchedFiles:       s.TouchedFiles,
+			TouchedSinceCommit: s.TouchedSinceCommit,
+			AdoptedPaths:       s.AdoptedPaths,
+			DiscardablePaths:   s.DiscardablePaths,
+		}
 	}
+
+	s.RepoRoot = root
+	if parked, ok := s.RepoScopes[root]; ok {
+		s.BaselineDirtyPaths = parked.BaselineDirtyPaths
+		s.TouchedFiles = parked.TouchedFiles
+		s.TouchedSinceCommit = parked.TouchedSinceCommit
+		s.AdoptedPaths = parked.AdoptedPaths
+		s.DiscardablePaths = parked.DiscardablePaths
+		delete(s.RepoScopes, root)
+		if s.BaselineDirtyPaths == nil {
+			s.BaselineDirtyPaths = []string{}
+		}
+		return
+	}
+	s.BaselineDirtyPaths = uniquePaths(status.DirtyPaths)
+	s.TouchedFiles = nil
+	s.TouchedSinceCommit = nil
+	s.AdoptedPaths = nil
+	s.DiscardablePaths = nil
 }
 
 func (s *State) appendHistory(entry string) {
@@ -575,6 +620,9 @@ func loadStateUnlocked(key StateKey) (*State, error) {
 	}
 
 	state, err := readActorState(key)
+	if os.IsNotExist(err) && restoreEndedFamily(key.SessionKey) {
+		state, err = readActorState(key)
+	}
 	if err == nil {
 		if key.ActorKey == MainActorKey && legacyPathIsSafe(key.SessionKey) {
 			if removeErr := os.Remove(legacyStatePath(key.SessionKey)); removeErr != nil && !os.IsNotExist(removeErr) {
@@ -763,6 +811,66 @@ func DeleteActorState(key StateKey) error {
 	return nil
 }
 
+const (
+	// endedFamilySuffix marks a session family retired by SessionEnd. The
+	// family is kept (renamed) rather than deleted so a resumed session —
+	// context compaction restarts fire SessionEnd + SessionStart with the
+	// same session id — recovers its touched/adopted tracking instead of
+	// misclassifying its own in-flight edits as pre-existing dirt.
+	endedFamilySuffix = ".ended"
+	// endedFamilyTTL is how long a retired family survives before the sweep
+	// in DeleteSessionFamily purges it.
+	endedFamilyTTL = 7 * 24 * time.Hour
+)
+
+func endedFamilyPath(sessionKey string) string {
+	return sessionFamilyPath(sessionKey) + endedFamilySuffix
+}
+
+// restoreEndedFamily revives a retired session family in place, if present.
+// Returns true when a tombstone was restored.
+func restoreEndedFamily(sessionKey string) bool {
+	ended := endedFamilyPath(sessionKey)
+	if _, err := os.Stat(ended); err != nil {
+		return false
+	}
+	family := sessionFamilyPath(sessionKey)
+	if _, err := os.Stat(family); err == nil {
+		return false // live family exists; leave the tombstone alone
+	}
+	return os.Rename(ended, family) == nil
+}
+
+// sweepEndedFamilies removes retired families older than endedFamilyTTL.
+func sweepEndedFamilies() {
+	familiesDir := filepath.Join(stateDir(), "families")
+	entries, err := os.ReadDir(familiesDir)
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-endedFamilyTTL)
+	for _, entry := range entries {
+		if !strings.HasSuffix(entry.Name(), endedFamilySuffix) {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil || info.ModTime().After(cutoff) {
+			continue
+		}
+		_ = os.RemoveAll(filepath.Join(familiesDir, entry.Name()))
+	}
+}
+
+// PurgeSessionFamily removes a session family AND its tombstone — a terminal
+// delete with no resume path. Tests and explicit cleanup use this; the
+// SessionEnd hook uses DeleteSessionFamily, which retires instead.
+func PurgeSessionFamily(sessionKey string) error {
+	if err := DeleteSessionFamily(sessionKey); err != nil {
+		return err
+	}
+	return os.RemoveAll(endedFamilyPath(sessionKey))
+}
+
 func DeleteSessionFamily(sessionKey string) error {
 	if sessionKey == "" {
 		return fmt.Errorf("empty session key")
@@ -789,9 +897,19 @@ func DeleteSessionFamily(sessionKey string) error {
 			return fmt.Errorf("state identity collision during session cleanup")
 		}
 	}
-	if err := os.RemoveAll(family); err != nil {
-		return err
+	// Retire rather than delete: a compaction restart resumes the same
+	// session id moments later and must find its tracking intact.
+	if _, statErr := os.Stat(family); statErr == nil {
+		ended := endedFamilyPath(sessionKey)
+		if err := os.RemoveAll(ended); err != nil {
+			return err
+		}
+		if err := os.Rename(family, ended); err != nil {
+			return err
+		}
+		_ = os.Chtimes(ended, time.Now(), time.Now())
 	}
+	sweepEndedFamilies()
 	if legacyPathIsSafe(sessionKey) {
 		if err := os.Remove(legacyStatePath(sessionKey)); err != nil && !os.IsNotExist(err) {
 			return err
