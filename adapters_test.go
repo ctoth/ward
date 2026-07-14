@@ -192,6 +192,37 @@ func TestDetectCodexTreatsArgvAsSingleCommand(t *testing.T) {
 	}
 }
 
+func TestDetectCodexLocalShellUsesWorkdirAsCWD(t *testing.T) {
+	data := []byte(`{
+		"session_id":"codex-workdir-session",
+		"cwd":"C:/repo-a",
+		"hook_event":{
+			"event_type":"after_tool_use",
+			"tool_name":"local_shell",
+			"tool_input":{
+				"params":{
+					"command":["git","add","--","owned.txt"],
+					"workdir":"C:/repo-b"
+				}
+			}
+		}
+	}`)
+
+	event, agent, err := DetectAndParse(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agent != AgentCodex {
+		t.Fatalf("agent = %v, want Codex", agent)
+	}
+	if event.CWD != "C:/repo-b" {
+		t.Fatalf("CWD = %q, want local shell workdir", event.CWD)
+	}
+	if got := EffectiveRepoDir(event); got != "C:/repo-b" {
+		t.Fatalf("effective repo dir = %q, want local shell workdir", got)
+	}
+}
+
 func TestDetectCodexPreservesExplicitActor(t *testing.T) {
 	data := []byte(`{
 		"session_id":"codex-session",
@@ -210,6 +241,50 @@ func TestDetectCodexPreservesExplicitActor(t *testing.T) {
 	}
 	if event.AgentID != "codex-worker-2" {
 		t.Fatalf("AgentID = %q, want codex-worker-2", event.AgentID)
+	}
+}
+
+func TestDetectCodexApplyPatchExtractsTouchedPaths(t *testing.T) {
+	data := []byte(`{
+		"session_id":"codex-patch-session",
+		"cwd":"C:/repo-a",
+		"hook_event":{
+			"event_type":"after_tool_use",
+			"tool_name":"apply_patch",
+			"tool_input":{
+				"input_type":"custom",
+				"input":"*** Begin Patch\n*** Update File: C:\\repo-b\\old name.txt\n*** Move to: C:\\repo-b\\new name.txt\n@@\n-old\n+new\n*** Add File: C:\\repo-b\\added.txt\n+added\n*** Delete File: C:\\repo-b\\deleted.txt\n*** End Patch"
+			}
+		}
+	}`)
+
+	event, agent, err := DetectAndParse(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agent != AgentCodex {
+		t.Fatalf("agent = %v, want Codex", agent)
+	}
+	if event.Input["file_path"] != "C:/repo-b/old name.txt" {
+		t.Fatalf("file_path = %#v, want first patched path", event.Input["file_path"])
+	}
+	paths, ok := event.Input["file_paths"].([]string)
+	if !ok {
+		t.Fatalf("file_paths type = %T, want []string", event.Input["file_paths"])
+	}
+	want := []string{
+		"C:/repo-b/old name.txt",
+		"C:/repo-b/new name.txt",
+		"C:/repo-b/added.txt",
+		"C:/repo-b/deleted.txt",
+	}
+	if len(paths) != len(want) {
+		t.Fatalf("file_paths = %#v, want %#v", paths, want)
+	}
+	for i := range want {
+		if paths[i] != want[i] {
+			t.Fatalf("file_paths = %#v, want %#v", paths, want)
+		}
 	}
 }
 

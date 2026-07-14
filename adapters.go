@@ -133,6 +133,36 @@ func EffectiveRepoDir(event ToolEvent) string {
 	return event.CWD
 }
 
+func enrichApplyPatchPaths(event *ToolEvent) {
+	if event.Tool != "apply_patch" {
+		return
+	}
+	patch, ok := event.Input["input"].(string)
+	if !ok || patch == "" {
+		return
+	}
+
+	var paths []string
+	for _, line := range strings.Split(patch, "\n") {
+		for _, prefix := range []string{"*** Update File: ", "*** Add File: ", "*** Delete File: ", "*** Move to: "} {
+			if !strings.HasPrefix(line, prefix) {
+				continue
+			}
+			path := strings.TrimSpace(strings.TrimPrefix(line, prefix))
+			if path != "" {
+				paths = appendUniquePath(paths, path)
+			}
+			break
+		}
+	}
+	if len(paths) == 0 {
+		return
+	}
+
+	event.Input["file_path"] = paths[0]
+	event.Input["file_paths"] = paths
+}
+
 // resolveShellPath resolves a possibly-relative path against a base directory.
 // An empty path means the base itself.
 func resolveShellPath(base, path string) string {
@@ -257,6 +287,10 @@ func parseCodex(raw map[string]any, hookEvent map[string]any) (ToolEvent, AgentT
 	} else {
 		event.Input = make(map[string]any)
 	}
+	if workdir := strField(event.Input, "workdir"); workdir != "" {
+		event.CWD = resolveShellPath(event.CWD, workdir)
+	}
+	enrichApplyPatchPaths(&event)
 
 	return event, AgentCodex, nil
 }

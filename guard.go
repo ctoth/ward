@@ -341,7 +341,14 @@ func (s *State) Update(tool string, input map[string]any) {
 	toolName := canonicalToolName(tool)
 
 	if toolName == "Edit" || toolName == "Write" {
+		var filePaths []string
 		if filePath, ok := input["file_path"].(string); ok && filePath != "" {
+			filePaths = append(filePaths, filePath)
+		}
+		if paths, ok := stringSlice(input["file_paths"]); ok {
+			filePaths = append(filePaths, paths...)
+		}
+		for _, filePath := range uniquePaths(filePaths) {
 			filePath = s.normalizeTrackedPath(filePath)
 			s.TouchedFiles = appendUniquePath(s.TouchedFiles, filePath)
 			s.TouchedSinceCommit = appendUniquePath(s.TouchedSinceCommit, filePath)
@@ -1378,6 +1385,8 @@ func canonicalToolName(tool string) string {
 	switch tool {
 	case "local_shell":
 		return "Bash"
+	case "apply_patch":
+		return "Edit"
 	default:
 		return tool
 	}

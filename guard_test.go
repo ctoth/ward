@@ -1911,3 +1911,91 @@ func TestCdPrefixedGitEvaluatesAgainstTargetRepo(t *testing.T) {
 		t.Fatalf("cd-prefixed owned add must not deny, got %+v", result)
 	}
 }
+
+func TestCodexApplyPatchOwnsSiblingRepoPathForStaging(t *testing.T) {
+	rules, err := LoadRulesFromDir("builtin_profiles/git-discipline/rules")
+	if err != nil {
+		t.Fatal(err)
+	}
+	guard, err := NewGuard(nil, rules)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	repoA := initTestRepo(t)
+	repoB := initTestRepo(t)
+	filePath := filepath.Join(repoB, "owned.txt")
+	if err := os.WriteFile(filePath, []byte("before\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, repoB, "add", "owned.txt")
+	gitRun(t, repoB, "commit", "-m", "initial")
+
+	state := NewState("implementing")
+	statusB, err := ComputeRepoStatus(repoB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.SyncRepo(statusB)
+	statusA, err := ComputeRepoStatus(repoA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.SyncRepo(statusA)
+
+	if err := os.WriteFile(filePath, []byte("after\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(map[string]any{
+		"session_id": "codex-patch-session",
+		"cwd":        NormalizePath(repoA),
+		"hook_event": map[string]any{
+			"event_type": "after_tool_use",
+			"tool_name":  "apply_patch",
+			"tool_input": map[string]any{
+				"input_type": "custom",
+				"input":      "*** Begin Patch\n*** Update File: " + NormalizePath(filePath) + "\n@@\n-before\n+after\n*** End Patch",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	patchEvent, agent, err := DetectAndParse(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agent != AgentCodex {
+		t.Fatalf("agent = %v, want Codex", agent)
+	}
+	patchStatus, err := ComputeRepoStatus(EffectiveRepoDir(patchEvent))
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.SyncRepo(patchStatus)
+	state.Update(patchEvent.Tool, patchEvent.Input)
+
+	if state.RepoRoot != NormalizePath(repoB) {
+		t.Fatalf("patch repo root = %q, want %q", state.RepoRoot, NormalizePath(repoB))
+	}
+	if len(state.TouchedFiles) != 1 || state.TouchedFiles[0] != "owned.txt" {
+		t.Fatalf("patch touched files = %#v, want [owned.txt]", state.TouchedFiles)
+	}
+	if got := state.History[len(state.History)-1]; got != "Edit" {
+		t.Fatalf("patch history entry = %q, want Edit", got)
+	}
+
+	addEvent := gitBashEvent(t, repoA, "git -C "+NormalizePath(repoB)+" add -- owned.txt")
+	addStatus, err := ComputeRepoStatus(EffectiveRepoDir(addEvent))
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.SyncRepo(addStatus)
+	result, _, err := Evaluate(guard, state, addEvent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != nil {
+		t.Fatalf("staging parent-authored apply_patch path denied: %+v", result)
+	}
+}
