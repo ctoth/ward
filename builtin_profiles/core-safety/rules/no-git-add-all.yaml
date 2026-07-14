@@ -7,4 +7,4 @@ when: |
      )
   && !("git-add-all" in session.signals)
 action: deny
-message: "Bulk staging is forbidden. Run: ward allow git-add-all"
+message: "Bulk staging is forbidden. Only after the user or controlling workflow authorizes this exact exception, record it with: ward allow git-add-all"

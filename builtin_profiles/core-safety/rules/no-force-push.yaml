@@ -11,4 +11,4 @@ when: |
      )
   && !("force-push" in session.signals)
 action: deny
-message: "Force-push requires explicit permission. Run: ward allow force-push"
+message: "Force-push is blocked. Only after the user or controlling workflow authorizes this exact exception, record it with: ward allow force-push"

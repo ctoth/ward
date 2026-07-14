@@ -8,4 +8,4 @@ when: |
      )
   && !("python-c" in session.signals)
 action: deny
-message: "Write a .py file, then run it. Run: ward allow python-c"
+message: "Write a .py file, then run it. Only after the user or controlling workflow authorizes this exact exception, record it with: ward allow python-c"

@@ -3,4 +3,4 @@ when: |
   && input.commands.exists(c, c.name == "tskill")
   && !("tskill" in session.signals)
 action: deny
-message: "Leave processes alone. Do not use tskill. Run: ward allow tskill"
+message: "Leave processes alone. Do not use tskill. Only after the user or controlling workflow authorizes this exact exception, record it with: ward allow tskill"

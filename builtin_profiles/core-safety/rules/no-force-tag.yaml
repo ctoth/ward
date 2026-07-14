@@ -10,4 +10,4 @@ when: |
      )
   && !("force-tag" in session.signals)
 action: deny
-message: "Tags are immutable. Create a new tag instead. Run: ward allow force-tag"
+message: "Tags are immutable. Create a new tag instead. Only after the user or controlling workflow authorizes this exact exception, record it with: ward allow force-tag"

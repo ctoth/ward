@@ -7,4 +7,4 @@ when: |
      )
   && !("git-amend" in session.signals)
 action: deny
-message: "git commit --amend is forbidden (it rewrites history and can land on someone else's commit). Make a new commit instead. Run: ward allow git-amend"
+message: "git commit --amend is forbidden (it rewrites history and can land on someone else's commit). Make a new commit instead. Only after the user or controlling workflow authorizes this exact exception, record it with: ward allow git-amend"

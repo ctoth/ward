@@ -3,4 +3,4 @@ when: |
   && input.commands.exists(c, c.name == "git" && c.git_category == "workspace_destructive")
   && !("git-stash" in session.signals)
 action: deny
-message: "git stash and git clean are forbidden. Run: ward allow git-stash"
+message: "git stash and git clean are forbidden. Only after the user or controlling workflow authorizes this exact exception, record it with: ward allow git-stash"

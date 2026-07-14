@@ -8,4 +8,4 @@ when: |
        && c.git_category in ["switch", "integrate", "history_rewrite"]
      )
 action: deny
-message: "Switching/integration/history rewrite requires a clean tree. Run: ward allow dirty-tree-switch"
+message: "Switching/integration/history rewrite requires a clean tree. Only after the user or controlling workflow authorizes this exact exception, record it with: ward allow dirty-tree-switch"

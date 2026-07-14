@@ -3,4 +3,4 @@ when: |
   && input.url.matches("github\\.com/[^/]+/[^/]+/(blob|tree|raw)/")
   && !("github-raw-fetch" in session.signals)
 action: deny
-message: "Clone the repo instead of fetching raw files. Run: ward allow github-raw-fetch"
+message: "Clone the repo instead of fetching raw files. Only after the user or controlling workflow authorizes this exact exception, record it with: ward allow github-raw-fetch"

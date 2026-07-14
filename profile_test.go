@@ -2,10 +2,47 @@ package main
 
 import (
 	"encoding/json"
+	"io/fs"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestBuiltinRuleOverrideMessagesDoNotMintTheirOwnAuthority(t *testing.T) {
+	const authorityBoundary = "Only after the user or controlling workflow authorizes this exact exception, record it with: ward allow"
+	found := 0
+	err := fs.WalkDir(builtinProfilesFS, ".", func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || !strings.HasSuffix(path, ".yaml") {
+			return nil
+		}
+		data, err := fs.ReadFile(builtinProfilesFS, path)
+		if err != nil {
+			return err
+		}
+		text := string(data)
+		if !strings.Contains(text, "ward allow") {
+			return nil
+		}
+		found++
+		if !strings.Contains(text, authorityBoundary) {
+			t.Errorf("%s presents ward allow without the authority boundary", path)
+		}
+		if strings.Contains(text, "Run: ward allow") {
+			t.Errorf("%s tells the actor to mint its own override", path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found == 0 {
+		t.Fatal("expected built-in rules with ward allow overrides")
+	}
+}
 
 func TestBuiltinProfileNames(t *testing.T) {
 	names, err := builtinProfileNames()

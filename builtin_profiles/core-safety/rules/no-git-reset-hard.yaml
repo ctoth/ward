@@ -7,4 +7,4 @@ when: |
      )
   && !("git-reset-hard" in session.signals)
 action: deny
-message: "git reset --hard is forbidden. Run: ward allow git-reset-hard"
+message: "git reset --hard is forbidden. Only after the user or controlling workflow authorizes this exact exception, record it with: ward allow git-reset-hard"
