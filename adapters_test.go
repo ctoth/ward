@@ -103,188 +103,33 @@ func TestDetectGemini(t *testing.T) {
 	}
 }
 
-func TestDetectCodex(t *testing.T) {
-	data, err := os.ReadFile("testdata/codex_aftertool.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	event, agent, err := DetectAndParse(data)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if agent != AgentCodex {
-		t.Errorf("expected AgentCodex, got %v", agent)
-	}
-	if event.Tool != "local_shell" {
-		t.Errorf("expected tool local_shell, got %q", event.Tool)
-	}
-	if event.SessionID != "codex-session-789" {
-		t.Errorf("expected session codex-session-789, got %q", event.SessionID)
-	}
-	if event.EventType != "post_tool" {
-		t.Errorf("expected post_tool, got %q", event.EventType)
-	}
-	// Codex command should be flattened from []string to string
-	if cmd, ok := event.Input["command"].(string); !ok || cmd != "python -c print('hello')" {
-		t.Errorf("unexpected codex command: %v", event.Input["command"])
-	}
-
-	commands, ok := event.Input["commands"].([]any)
-	if !ok {
-		t.Fatalf("expected parsed commands on codex event, got %T", event.Input["commands"])
-	}
-	if len(commands) != 1 {
-		t.Fatalf("expected 1 parsed command, got %d", len(commands))
-	}
-	first, ok := commands[0].(map[string]any)
-	if !ok {
-		t.Fatalf("expected command map, got %T", commands[0])
-	}
-	if first["name"] != "python" {
-		t.Errorf("expected parsed command name python, got %v", first["name"])
-	}
-	if first["full"] != "python -c print('hello')" {
-		t.Errorf("expected parsed command full string, got %v", first["full"])
-	}
-}
-
-func TestDetectCodexTreatsArgvAsSingleCommand(t *testing.T) {
+func TestDetectCodexClaudeCompatiblePayload(t *testing.T) {
 	data := []byte(`{
-		"session_id":"codex-session-argv",
-		"cwd":"C:/tmp",
-		"hook_event":{
-			"event_type":"after_tool_use",
-			"tool_name":"local_shell",
-			"tool_input":{
-				"params":{
-					"command":["echo",";","git","stash"]
-				}
-			}
-		}
-	}`)
-
-	event, agent, err := DetectAndParse(data)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if agent != AgentCodex {
-		t.Fatalf("expected AgentCodex, got %v", agent)
-	}
-
-	commands, ok := event.Input["commands"].([]any)
-	if !ok {
-		t.Fatalf("expected parsed commands on codex event, got %T", event.Input["commands"])
-	}
-	if len(commands) != 1 {
-		t.Fatalf("expected literal argv to stay one command, got %d commands: %#v", len(commands), commands)
-	}
-	first, ok := commands[0].(map[string]any)
-	if !ok {
-		t.Fatalf("expected command map, got %T", commands[0])
-	}
-	if first["name"] != "echo" {
-		t.Errorf("expected argv command name echo, got %v", first["name"])
-	}
-	if first["full"] != "echo ; git stash" {
-		t.Errorf("expected argv command full string preserved literally, got %v", first["full"])
-	}
-}
-
-func TestDetectCodexCompatiblePreToolCmdAlias(t *testing.T) {
-	data := []byte(`{
+		"session_id":"codex-session",
+		"turn_id":"codex-turn",
+		"cwd":"C:/repo",
 		"hook_event_name":"PreToolUse",
-		"session_id":"codex-pretool-session",
-		"cwd":"C:/repo-a",
 		"tool_name":"Bash",
-		"tool_input":{
-			"cmd":"ward enter adversary",
-			"workdir":"C:/repo-b"
-		}
-	}`)
-
-	event, _, err := DetectAndParse(data)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := event.Input["command"]; got != "ward enter adversary" {
-		t.Fatalf("normalized command = %#v, want ward enter adversary", got)
-	}
-	if event.CWD != "C:/repo-b" {
-		t.Fatalf("CWD = %q, want cmd workdir", event.CWD)
-	}
-	if !isWardControlPlaneCommand(event.Input) {
-		t.Fatalf("cmd alias was not recognized as an exact Ward control-plane command: %#v", event.Input)
-	}
-}
-
-func TestDetectCodexExecCommandCmdAlias(t *testing.T) {
-	data := []byte(`{
-		"session_id":"codex-exec-session",
-		"cwd":"C:/repo-a",
-		"hook_event":{
-			"event_type":"before_tool_use",
-			"tool_name":"exec_command",
-			"tool_input":{
-				"params":{
-					"cmd":"Get-Content -Raw AGENTS.md",
-					"workdir":"C:/repo-b"
-				}
-			}
-		}
+		"tool_input":{"command":"git status"},
+		"tool_use_id":"tool-1"
 	}`)
 
 	event, agent, err := DetectAndParse(data)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if agent != AgentCodex {
-		t.Fatalf("agent = %v, want Codex", agent)
+	if agent != AgentClaude {
+		t.Fatalf("agent = %v, want Claude-compatible", agent)
 	}
-	if canonicalToolName(event.Tool) != "Bash" {
-		t.Fatalf("canonical tool = %q, want Bash", canonicalToolName(event.Tool))
+	if event.Tool != "Bash" || event.EventType != "pre_tool" {
+		t.Fatalf("event = (%q, %q), want Bash pre_tool", event.Tool, event.EventType)
 	}
-	if event.EventType != "pre_tool" {
-		t.Fatalf("event type = %q, want pre_tool", event.EventType)
-	}
-	if got := event.Input["command"]; got != "Get-Content -Raw AGENTS.md" {
-		t.Fatalf("normalized command = %#v, want Get-Content command", got)
+	if event.SessionID != "codex-session" {
+		t.Fatalf("session = %q, want codex-session", event.SessionID)
 	}
 	commands, ok := event.Input["commands"].([]any)
 	if !ok || len(commands) != 1 {
-		t.Fatalf("parsed commands = %#v, want one command", event.Input["commands"])
-	}
-}
-
-func TestDetectCodexLocalShellUsesWorkdirAsCWD(t *testing.T) {
-	data := []byte(`{
-		"session_id":"codex-workdir-session",
-		"cwd":"C:/repo-a",
-		"hook_event":{
-			"event_type":"after_tool_use",
-			"tool_name":"local_shell",
-			"tool_input":{
-				"params":{
-					"command":["git","add","--","owned.txt"],
-					"workdir":"C:/repo-b"
-				}
-			}
-		}
-	}`)
-
-	event, agent, err := DetectAndParse(data)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if agent != AgentCodex {
-		t.Fatalf("agent = %v, want Codex", agent)
-	}
-	if event.CWD != "C:/repo-b" {
-		t.Fatalf("CWD = %q, want local shell workdir", event.CWD)
-	}
-	if got := EffectiveRepoDir(event, "C:/repo-c"); got != "C:/repo-b" {
-		t.Fatalf("effective repo dir = %q, want local shell workdir", got)
+		t.Fatalf("commands = %#v, want one parsed command", event.Input["commands"])
 	}
 }
 
@@ -313,12 +158,11 @@ func TestDetectCodexPreservesExplicitActor(t *testing.T) {
 	data := []byte(`{
 		"session_id":"codex-session",
 		"agent_id":"codex-worker-2",
+		"agent_type":"worker",
 		"cwd":"C:/tmp",
-		"hook_event":{
-			"event_type":"after_tool_use",
-			"tool_name":"local_shell",
-			"tool_input":{"params":{"command":["go","test","./..."]}}
-		}
+		"hook_event_name":"PreToolUse",
+		"tool_name":"Bash",
+		"tool_input":{"command":"go test ./..."}
 	}`)
 
 	event, _, err := DetectAndParse(data)
@@ -334,13 +178,10 @@ func TestDetectCodexApplyPatchExtractsTouchedPaths(t *testing.T) {
 	data := []byte(`{
 		"session_id":"codex-patch-session",
 		"cwd":"C:/repo-a",
-		"hook_event":{
-			"event_type":"after_tool_use",
-			"tool_name":"apply_patch",
-			"tool_input":{
-				"input_type":"custom",
-				"input":"*** Begin Patch\n*** Update File: C:\\repo-b\\old name.txt\n*** Move to: C:\\repo-b\\new name.txt\n@@\n-old\n+new\n*** Add File: C:\\repo-b\\added.txt\n+added\n*** Delete File: C:\\repo-b\\deleted.txt\n*** End Patch"
-			}
+		"hook_event_name":"PreToolUse",
+		"tool_name":"apply_patch",
+		"tool_input":{
+			"command":"*** Begin Patch\n*** Update File: C:\\repo-b\\old name.txt\n*** Move to: C:\\repo-b\\new name.txt\n@@\n-old\n+new\n*** Add File: C:\\repo-b\\added.txt\n+added\n*** Delete File: C:\\repo-b\\deleted.txt\n*** End Patch"
 		}
 	}`)
 
@@ -348,8 +189,8 @@ func TestDetectCodexApplyPatchExtractsTouchedPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if agent != AgentCodex {
-		t.Fatalf("agent = %v, want Codex", agent)
+	if agent != AgentClaude {
+		t.Fatalf("agent = %v, want Claude-compatible", agent)
 	}
 	if event.Input["file_path"] != "C:/repo-b/old name.txt" {
 		t.Fatalf("file_path = %#v, want first patched path", event.Input["file_path"])
@@ -371,34 +212,6 @@ func TestDetectCodexApplyPatchExtractsTouchedPaths(t *testing.T) {
 		if paths[i] != want[i] {
 			t.Fatalf("file_paths = %#v, want %#v", paths, want)
 		}
-	}
-}
-
-func TestDetectCodexApplyPatchExtractsTouchedPathsFromHookCommand(t *testing.T) {
-	data := []byte(`{
-		"session_id":"codex-patch-command-session",
-		"cwd":"C:/repo-a",
-		"hook_event":{
-			"event_type":"after_tool_use",
-			"tool_name":"apply_patch",
-			"tool_input":{
-				"command":"*** Begin Patch\n*** Update File: C:\\repo-b\\owned.txt\n@@\n-old\n+new\n*** End Patch"
-			}
-		}
-	}`)
-
-	event, agent, err := DetectAndParse(data)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if agent != AgentCodex {
-		t.Fatalf("agent = %v, want Codex", agent)
-	}
-	if event.Input["file_path"] != "C:/repo-b/owned.txt" {
-		t.Fatalf("file_path = %#v, want command-shaped patched path", event.Input["file_path"])
-	}
-	if got := EffectiveRepoDir(event, "C:/repo-c"); got != "C:/repo-b" {
-		t.Fatalf("effective repo dir = %q, want patched file repo", got)
 	}
 }
 
@@ -478,14 +291,6 @@ func TestFormatGeminiDeny(t *testing.T) {
 	}
 }
 
-func TestFormatCodexReturnsNil(t *testing.T) {
-	result := &Result{Action: "deny", Message: "blocked"}
-	resp := FormatResponse(AgentCodex, "post_tool", result)
-	if resp != nil {
-		t.Errorf("expected nil for codex, got %v", resp)
-	}
-}
-
 func TestFormatGeminiAfterToolContext(t *testing.T) {
 	result := &Result{Action: "context", Message: "extra context"}
 	resp := FormatResponse(AgentGemini, "post_tool", result)
@@ -502,17 +307,6 @@ func TestFormatGeminiAfterToolContext(t *testing.T) {
 	}
 	if hook["additionalContext"] != "extra context" {
 		t.Errorf("expected additionalContext, got %v", hook["additionalContext"])
-	}
-}
-
-func TestEncodeResponseSkipsNilCodexOutput(t *testing.T) {
-	result := &Result{Action: "deny", Message: "blocked"}
-	out, err := EncodeResponse(AgentCodex, "post_tool", result)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if out != nil {
-		t.Fatalf("expected nil output for codex, got %q", string(out))
 	}
 }
 

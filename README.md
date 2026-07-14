@@ -180,13 +180,14 @@ ward validate
 
 ## Multi-agent support
 
-Ward auto-detects the calling agent from the JSON format:
+Ward auto-detects the hook protocol from the JSON format:
 
-- **Claude Code**: `hook_event_name` is `PreToolUse`/`PostToolUse`
+- **Claude Code and Codex CLI**: flat Claude-compatible payloads where
+  `hook_event_name` is `PreToolUse`/`PostToolUse`; Codex also supplies
+  `turn_id`
 - **Gemini CLI**: `hook_event_name` is `BeforeTool`/`AfterTool`
-- **Codex CLI**: nested `hook_event.event_type`
 
-Each agent gets responses in its native format.
+Each protocol gets responses in its native format.
 
 For interactive commands such as `ward adopt`, an explicit `--session` or
 `WARD_SESSION` takes priority. Under Codex, Ward automatically uses

@@ -707,21 +707,15 @@ func TestEvaluateConsumesOnlyDecisiveOneTimeSignals(t *testing.T) {
 	}
 }
 
-func TestEvaluateCodexLocalShellMatchesBashRules(t *testing.T) {
+func TestEvaluateCodexBashMatchesBashRules(t *testing.T) {
 	guard := loadTestGuard(t)
 	state := NewState("implementing")
 	raw := []byte(`{
 		"session_id":"codex-session-789",
 		"cwd":"C:/tmp",
-		"hook_event":{
-			"event_type":"after_tool_use",
-			"tool_name":"local_shell",
-			"tool_input":{
-				"params":{
-					"command":["python","-c","print(1)"]
-				}
-			}
-		}
+		"hook_event_name":"PreToolUse",
+		"tool_name":"Bash",
+		"tool_input":{"command":"python -c print(1)"}
 	}`)
 
 	event, _, err := DetectAndParse(raw)
@@ -2173,15 +2167,12 @@ func TestCodexApplyPatchOwnsSiblingRepoPathForStaging(t *testing.T) {
 		t.Fatal(err)
 	}
 	payload, err := json.Marshal(map[string]any{
-		"session_id": "codex-patch-session",
-		"cwd":        NormalizePath(repoA),
-		"hook_event": map[string]any{
-			"event_type": "after_tool_use",
-			"tool_name":  "apply_patch",
-			"tool_input": map[string]any{
-				"input_type": "custom",
-				"input":      "*** Begin Patch\n*** Update File: " + NormalizePath(filePath) + "\n@@\n-before\n+after\n*** End Patch",
-			},
+		"session_id":      "codex-patch-session",
+		"cwd":             NormalizePath(repoA),
+		"hook_event_name": "PreToolUse",
+		"tool_name":       "apply_patch",
+		"tool_input": map[string]any{
+			"command": "*** Begin Patch\n*** Update File: " + NormalizePath(filePath) + "\n@@\n-before\n+after\n*** End Patch",
 		},
 	})
 	if err != nil {
@@ -2191,8 +2182,8 @@ func TestCodexApplyPatchOwnsSiblingRepoPathForStaging(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if agent != AgentCodex {
-		t.Fatalf("agent = %v, want Codex", agent)
+	if agent != AgentClaude {
+		t.Fatalf("agent = %v, want Claude-compatible", agent)
 	}
 	patchStatus := &RepoStatus{
 		InGit:         true,

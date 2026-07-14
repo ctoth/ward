@@ -12,7 +12,6 @@ type AgentType int
 const (
 	AgentClaude AgentType = iota
 	AgentGemini
-	AgentCodex
 )
 
 func (a AgentType) String() string {
@@ -21,8 +20,6 @@ func (a AgentType) String() string {
 		return "claude"
 	case AgentGemini:
 		return "gemini"
-	case AgentCodex:
-		return "codex"
 	default:
 		return "unknown"
 	}
@@ -51,19 +48,8 @@ func DetectAndParse(data []byte) (ToolEvent, AgentType, error) {
 	var agent AgentType
 	var err error
 
-	// Codex: has nested hook_event.event_type
-	if hookEvent, ok := raw["hook_event"].(map[string]any); ok {
-		if _, hasEventType := hookEvent["event_type"]; hasEventType {
-			event, agent, err = parseCodex(raw, hookEvent)
-			if err != nil {
-				return event, agent, err
-			}
-			enrichBashCommands(&event)
-			return event, agent, nil
-		}
-	}
-
-	// Claude vs Gemini: both have hook_event_name, but different values
+	// Claude and Codex share the Claude-compatible event names and payload.
+	// Gemini uses its own BeforeTool/AfterTool names.
 	if eventName, ok := raw["hook_event_name"].(string); ok {
 		switch eventName {
 		case "PreToolUse", "PostToolUse", "PostToolUseFailure":
@@ -80,7 +66,7 @@ func DetectAndParse(data []byte) (ToolEvent, AgentType, error) {
 		}
 	}
 
-	return ToolEvent{}, 0, fmt.Errorf("cannot detect agent from JSON (no hook_event_name or hook_event.event_type)")
+	return ToolEvent{}, 0, fmt.Errorf("cannot detect agent from JSON (no recognized hook_event_name)")
 }
 
 // enrichBashCommands adds parsed shell commands to Bash tool events.
@@ -252,6 +238,7 @@ func parseClaude(raw map[string]any, eventName string) (ToolEvent, AgentType, er
 	default:
 		event.EventType = "post_tool"
 	}
+	enrichApplyPatchPaths(&event)
 
 	return event, AgentClaude, nil
 }
@@ -284,58 +271,6 @@ func parseGemini(raw map[string]any, eventName string) (ToolEvent, AgentType, er
 	return event, AgentGemini, nil
 }
 
-func parseCodex(raw map[string]any, hookEvent map[string]any) (ToolEvent, AgentType, error) {
-	event := ToolEvent{
-		SessionID: strField(raw, "session_id"),
-		AgentID:   strField(raw, "agent_id"),
-		AgentType: strField(raw, "agent_type"),
-		CWD:       strField(raw, "cwd"),
-		EventType: "post_tool",
-	}
-	if strings.HasPrefix(strField(hookEvent, "event_type"), "before") {
-		event.EventType = "pre_tool"
-	}
-
-	event.Tool = strField(hookEvent, "tool_name")
-
-	// Codex tool_input is nested differently depending on tool_kind
-	if toolInput, ok := hookEvent["tool_input"].(map[string]any); ok {
-		// Flatten the input for uniform access
-		event.Input = make(map[string]any)
-		if params, ok := toolInput["params"].(map[string]any); ok {
-			// LocalShell: params.command is []string, join for regex matching
-			if cmdSlice, ok := params["command"].([]any); ok {
-				parts := make([]string, 0, len(cmdSlice))
-				for _, p := range cmdSlice {
-					if s, ok := p.(string); ok {
-						parts = append(parts, s)
-					}
-				}
-				event.Input["command"] = joinStrings(parts)
-				event.Input["command_argv"] = parts
-			}
-			for k, v := range params {
-				if k != "command" {
-					event.Input[k] = v
-				}
-			}
-		} else {
-			// Function or Custom: has "arguments" or "input" directly
-			for k, v := range toolInput {
-				event.Input[k] = v
-			}
-		}
-	} else {
-		event.Input = make(map[string]any)
-	}
-	if workdir := strField(event.Input, "workdir"); workdir != "" {
-		event.CWD = resolveShellPath(event.CWD, workdir)
-	}
-	enrichApplyPatchPaths(&event)
-
-	return event, AgentCodex, nil
-}
-
 // FormatResponse converts a Result into agent-specific hook response JSON.
 func FormatResponse(agent AgentType, eventType string, result *Result) map[string]any {
 	switch agent {
@@ -343,8 +278,6 @@ func FormatResponse(agent AgentType, eventType string, result *Result) map[strin
 		return formatClaude(result)
 	case AgentGemini:
 		return formatGemini(eventType, result)
-	case AgentCodex:
-		return nil // Codex has no response mechanism
 	default:
 		return nil
 	}
