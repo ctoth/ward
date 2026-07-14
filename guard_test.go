@@ -1876,16 +1876,24 @@ func TestNoStageUnownedBuiltinCatchesDirectAndLoopVariableAdds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	repo := initTestRepo(t)
+	repo := t.TempDir()
 	if err := os.WriteFile(filepath.Join(repo, "unowned.txt"), []byte("x\n"), 0o644); err != nil {
 		t.Fatal(err)
+	}
+	status := &RepoStatus{
+		InGit:          true,
+		Root:           NormalizePath(repo),
+		Branch:         "main",
+		HasUntracked:   true,
+		DirtyPaths:     []string{"unowned.txt"},
+		UntrackedPaths: []string{"unowned.txt"},
 	}
 
 	state := NewState("implementing")
 	state.TouchedFiles = []string{"owned.txt"}
 
 	direct := gitBashEvent(t, repo, "git add unowned.txt")
-	result, _, err := Evaluate(guard, state, direct)
+	result, _, err := EvaluateVerbose(guard, state, direct, status, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1894,7 +1902,7 @@ func TestNoStageUnownedBuiltinCatchesDirectAndLoopVariableAdds(t *testing.T) {
 	}
 
 	loop := gitBashEvent(t, repo, `for f in unowned.txt; do git add "$f" 2>/dev/null || echo "BLOCKED: $f"; done`)
-	result, _, err = Evaluate(guard, state, loop)
+	result, _, err = EvaluateVerbose(guard, state, loop, status, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1903,7 +1911,7 @@ func TestNoStageUnownedBuiltinCatchesDirectAndLoopVariableAdds(t *testing.T) {
 	}
 
 	owned := gitBashEvent(t, repo, "git add owned.txt")
-	result, _, err = Evaluate(guard, state, owned)
+	result, _, err = EvaluateVerbose(guard, state, owned, status, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1927,8 +1935,8 @@ func TestCrossRepoWriteRecordsTouchInTargetRepoScope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	repoA := initTestRepo(t) // session cwd
-	repoB := initTestRepo(t) // sibling repo the agent writes into
+	repoA := t.TempDir() // session cwd
+	repoB := t.TempDir() // sibling repo the agent writes into
 	// Pre-existing dirt in B, present before ward first sees the repo.
 	if err := os.WriteFile(filepath.Join(repoB, "unowned.txt"), []byte("x\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -1936,36 +1944,46 @@ func TestCrossRepoWriteRecordsTouchInTargetRepoScope(t *testing.T) {
 	repoBFwd := NormalizePath(repoB)
 
 	state := NewState("implementing")
-	// Mimic the production hook: every event syncs repo scope from the
-	// effective dir, then records the tool call.
-	observe := func(event ToolEvent) {
-		t.Helper()
-		status, err := ComputeRepoStatus(EffectiveRepoDir(event))
-		if err != nil {
-			t.Fatal(err)
-		}
-		state.SyncRepo(status)
-		state.Update(event.Tool, event.Input)
+	statusB := &RepoStatus{
+		InGit:          true,
+		Root:           repoBFwd,
+		Branch:         "main",
+		HasUntracked:   true,
+		DirtyPaths:     []string{"unowned.txt"},
+		UntrackedPaths: []string{"unowned.txt"},
 	}
 
 	// 1. Agent inspects the sibling repo (parses as git in B, baselines B).
-	observe(gitBashEvent(t, repoA, "cd "+repoBFwd+" && git status"))
+	inspectEvent := gitBashEvent(t, repoA, "cd "+repoBFwd+" && git status")
+	state.SyncRepo(statusB)
+	state.Update(inspectEvent.Tool, inspectEvent.Input)
 
 	// 2. Agent writes a new file into B; the event's cwd is still A.
 	if err := os.WriteFile(filepath.Join(repoB, "src.txt"), []byte("new\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	observe(ToolEvent{
+	writeEvent := ToolEvent{
 		Tool:      "Write",
 		Input:     map[string]any{"file_path": filepath.Join(repoB, "src.txt")},
 		SessionID: "test",
 		CWD:       repoA,
-	})
+	}
+	statusB = &RepoStatus{
+		InGit:          true,
+		Root:           repoBFwd,
+		Branch:         "main",
+		HasUntracked:   true,
+		DirtyPaths:     []string{"src.txt", "unowned.txt"},
+		UntrackedPaths: []string{"src.txt", "unowned.txt"},
+	}
+	state.SyncRepo(statusB)
+	state.Update(writeEvent.Tool, writeEvent.Input)
 
 	// 3. Staging the agent's own file in B must not deny.
 	event := gitBashEvent(t, repoA, "cd "+repoBFwd+" && git add src.txt")
-	observe(event)
-	result, _, err := Evaluate(guard, state, event)
+	state.SyncRepo(statusB)
+	state.Update(event.Tool, event.Input)
+	result, _, err := EvaluateVerbose(guard, state, event, statusB, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1975,8 +1993,9 @@ func TestCrossRepoWriteRecordsTouchInTargetRepoScope(t *testing.T) {
 
 	// 4. Pre-existing dirt in B still denies.
 	event = gitBashEvent(t, repoA, "cd "+repoBFwd+" && git add unowned.txt")
-	observe(event)
-	result, _, err = Evaluate(guard, state, event)
+	state.SyncRepo(statusB)
+	state.Update(event.Tool, event.Input)
+	result, _, err = EvaluateVerbose(guard, state, event, statusB, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2000,7 +2019,7 @@ func TestCdPrefixedGitEvaluatesAgainstTargetRepo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	repo := initTestRepo(t)
+	repo := t.TempDir()
 	// unowned.txt exists before the baseline snapshot: pre-existing dirt.
 	// owned.txt never touches the baseline — it stands for a file the agent
 	// created after the session started (the rule is list-based, so it need
@@ -2010,12 +2029,19 @@ func TestCdPrefixedGitEvaluatesAgainstTargetRepo(t *testing.T) {
 	}
 	outside := t.TempDir() // NOT a git repo
 	repoFwd := NormalizePath(repo)
+	status := &RepoStatus{
+		InGit:          true,
+		Root:           repoFwd,
+		Branch:         "main",
+		HasUntracked:   true,
+		DirtyPaths:     []string{"unowned.txt"},
+		UntrackedPaths: []string{"unowned.txt"},
+	}
 
 	// Mimic the production hook: repo status comes from the effective dir.
 	prepare := func(command string) (*State, ToolEvent) {
 		event := gitBashEvent(t, outside, command)
 		state := NewState("implementing")
-		status, _ := ComputeRepoStatus(EffectiveRepoDir(event))
 		state.SyncRepo(status)
 		state.TouchedFiles = appendUniquePath(state.TouchedFiles, "owned.txt")
 		return state, event
@@ -2023,7 +2049,7 @@ func TestCdPrefixedGitEvaluatesAgainstTargetRepo(t *testing.T) {
 
 	// Bypass closed: staging an unowned file through a cd prefix denies.
 	state, event := prepare(`cd ` + repoFwd + ` && git add unowned.txt`)
-	result, _, err := Evaluate(guard, state, event)
+	result, _, err := EvaluateVerbose(guard, state, event, status, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2033,7 +2059,7 @@ func TestCdPrefixedGitEvaluatesAgainstTargetRepo(t *testing.T) {
 
 	// Same through git -C.
 	state, event = prepare(`git -C ` + repoFwd + ` add unowned.txt`)
-	result, _, err = Evaluate(guard, state, event)
+	result, _, err = EvaluateVerbose(guard, state, event, status, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2043,7 +2069,7 @@ func TestCdPrefixedGitEvaluatesAgainstTargetRepo(t *testing.T) {
 
 	// False positive closed: a touched file stages fine through a cd prefix.
 	state, event = prepare(`cd ` + repoFwd + ` && git add owned.txt`)
-	result, _, err = Evaluate(guard, state, event)
+	result, _, err = EvaluateVerbose(guard, state, event, status, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2108,24 +2134,26 @@ func TestCodexApplyPatchOwnsSiblingRepoPathForStaging(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	repoA := initTestRepo(t)
-	repoB := initTestRepo(t)
+	repoA := t.TempDir()
+	repoB := t.TempDir()
 	filePath := filepath.Join(repoB, "owned.txt")
 	if err := os.WriteFile(filePath, []byte("before\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	gitRun(t, repoB, "add", "owned.txt")
-	gitRun(t, repoB, "commit", "-m", "initial")
 
 	state := NewState("implementing")
-	statusB, err := ComputeRepoStatus(repoB)
-	if err != nil {
-		t.Fatal(err)
+	statusB := &RepoStatus{
+		InGit:  true,
+		Root:   NormalizePath(repoB),
+		Branch: "main",
+		Clean:  true,
 	}
 	state.SyncRepo(statusB)
-	statusA, err := ComputeRepoStatus(repoA)
-	if err != nil {
-		t.Fatal(err)
+	statusA := &RepoStatus{
+		InGit:  true,
+		Root:   NormalizePath(repoA),
+		Branch: "main",
+		Clean:  true,
 	}
 	state.SyncRepo(statusA)
 
@@ -2154,9 +2182,13 @@ func TestCodexApplyPatchOwnsSiblingRepoPathForStaging(t *testing.T) {
 	if agent != AgentCodex {
 		t.Fatalf("agent = %v, want Codex", agent)
 	}
-	patchStatus, err := ComputeRepoStatus(EffectiveRepoDir(patchEvent))
-	if err != nil {
-		t.Fatal(err)
+	patchStatus := &RepoStatus{
+		InGit:         true,
+		Root:          NormalizePath(repoB),
+		Branch:        "main",
+		HasUnstaged:   true,
+		DirtyPaths:    []string{"owned.txt"},
+		UnstagedPaths: []string{"owned.txt"},
 	}
 	state.SyncRepo(patchStatus)
 	state.Update(patchEvent.Tool, patchEvent.Input)
@@ -2172,12 +2204,8 @@ func TestCodexApplyPatchOwnsSiblingRepoPathForStaging(t *testing.T) {
 	}
 
 	addEvent := gitBashEvent(t, repoA, "git -C "+NormalizePath(repoB)+" add -- owned.txt")
-	addStatus, err := ComputeRepoStatus(EffectiveRepoDir(addEvent))
-	if err != nil {
-		t.Fatal(err)
-	}
-	state.SyncRepo(addStatus)
-	result, _, err := Evaluate(guard, state, addEvent)
+	state.SyncRepo(patchStatus)
+	result, _, err := EvaluateVerbose(guard, state, addEvent, patchStatus, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

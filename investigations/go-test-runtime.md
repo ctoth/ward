@@ -31,10 +31,11 @@
 | Inject exact constant fact fixtures | Repeated Bash startup dominates policy unit tests | Full suite passes in 19.112 seconds while a dedicated test still executes both real fixture commands | Fact computation itself as the cost | Redundant Bash startup for constant test values |
 | Inject exact repository snapshots into policy tests | Live Git discovery is redundant when a policy test already defines repository state | Dirty-tree policy tests pass in 0.159 seconds; full suite passes in 14.890 seconds | CEL evaluation or filesystem fixtures as the cost | Redundant live repository discovery |
 | Skip unobservable repository discovery | Rules without `repo.*` cannot observe live Git state | Previously slow custom-rule group passes in 0.153 seconds; full suite passes in 11.452 seconds | Rule evaluation itself as the cost | Unobservable live Git discovery |
+| Inject snapshots into higher-level Git policy tests | Policy tests need repository activation, not repeated Git mechanics | Four-test group passes in 0.203 seconds; full suite passes in 7.799 seconds | Event parsing, state transitions, or CEL as the cost | Redundant real-Git setup in policy tests |
 
 ## Current Best Theory
 
-Repeated external-process startup is the root cause. Consolidating and reusing repository snapshots, disabling inherited fsmonitor, injecting exact fixtures, and skipping unobservable discovery reduced the suite from 65.532 to 11.452 seconds. Dedicated command-backed fact and real repository-status coverage remain. The remaining higher-level real-Git tests and installer build are now the dominant costs.
+Repeated external-process startup is the root cause. Consolidating and reusing repository snapshots, disabling inherited fsmonitor, injecting exact fixtures, and skipping unobservable discovery reduced the suite from 65.532 to 7.799 seconds. Dedicated command-backed fact and real repository-status coverage remain. The installer build, absolute repository discovery, and grant-path integration are now the dominant costs.
 
 ## Open Questions
 
@@ -42,4 +43,4 @@ Repeated external-process startup is the root cause. Consolidating and reusing r
 
 ## Next Action
 
-Commit the measured lazy-discovery improvement, then remove real Git setup from higher-level cross-repository policy tests while keeping `TestComputeRepoStatus` as the real integration authority.
+Commit the measured policy-fixture improvement, then remove unnecessary real repository setup from path normalization and isolate repository resolution behind a testable dependency for the two higher-level discovery tests.
