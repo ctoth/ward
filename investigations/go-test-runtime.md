@@ -30,10 +30,11 @@
 | Disable fsmonitor in ephemeral test repos | Temporary repos leak filesystem monitors and add startup cost | Full suite passes in 25.437 seconds and a focused real-Git run creates zero daemons | Ordinary temp filesystem I/O as the cause | Inherited fsmonitor config was a real secondary cause |
 | Inject exact constant fact fixtures | Repeated Bash startup dominates policy unit tests | Full suite passes in 19.112 seconds while a dedicated test still executes both real fixture commands | Fact computation itself as the cost | Redundant Bash startup for constant test values |
 | Inject exact repository snapshots into policy tests | Live Git discovery is redundant when a policy test already defines repository state | Dirty-tree policy tests pass in 0.159 seconds; full suite passes in 14.890 seconds | CEL evaluation or filesystem fixtures as the cost | Redundant live repository discovery |
+| Skip unobservable repository discovery | Rules without `repo.*` cannot observe live Git state | Previously slow custom-rule group passes in 0.153 seconds; full suite passes in 11.452 seconds | Rule evaluation itself as the cost | Unobservable live Git discovery |
 
 ## Current Best Theory
 
-Repeated external-process startup is the root cause. Consolidating repository status into one porcelain-v2 invocation and reusing one snapshot removed 37.159 seconds. Disabling inherited fsmonitor in temporary repositories removed another 2.936 seconds and stopped the daemon leak. Exact fact and repository fixtures removed another 10.547 seconds while retaining dedicated command-backed fact and real repository-status coverage. The remaining real-Git higher-level tests are the dominant avoidable cost.
+Repeated external-process startup is the root cause. Consolidating and reusing repository snapshots, disabling inherited fsmonitor, injecting exact fixtures, and skipping unobservable discovery reduced the suite from 65.532 to 11.452 seconds. Dedicated command-backed fact and real repository-status coverage remain. The remaining higher-level real-Git tests and installer build are now the dominant costs.
 
 ## Open Questions
 
@@ -41,4 +42,4 @@ Repeated external-process startup is the root cause. Consolidating repository st
 
 ## Next Action
 
-Commit the measured repository-fixture improvement, then remove real Git setup from higher-level cross-repository policy tests while keeping `TestComputeRepoStatus` as the real integration authority.
+Commit the measured lazy-discovery improvement, then remove real Git setup from higher-level cross-repository policy tests while keeping `TestComputeRepoStatus` as the real integration authority.

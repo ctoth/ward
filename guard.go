@@ -1132,9 +1132,14 @@ func EvaluateVerbose(guard *Guard, state *State, event ToolEvent, repoStatus *Re
 		return nil, map[string]bool{}, nil
 	}
 
-	repoDir := EffectiveRepoDir(event)
 	if repoStatus == nil {
-		repoStatus, _ = ComputeRepoStatus(repoDir)
+		repoStatus = &RepoStatus{Clean: true}
+		for _, rule := range guard.Rules {
+			if strings.Contains(rule.When, "repo.") {
+				repoStatus, _ = ComputeRepoStatus(EffectiveRepoDir(event))
+				break
+			}
+		}
 	}
 
 	sessionMap := state.ToMap()
