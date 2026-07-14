@@ -44,6 +44,7 @@ type Fact struct {
 type Guard struct {
 	Facts      map[string]Fact
 	factValues map[string]any
+	repoStatus *RepoStatus
 	Rules      []Rule
 	env        *cel.Env
 }
@@ -1113,7 +1114,7 @@ var signalRefRe = regexp.MustCompile(`(?:session\.signals\.contains\("([^"]+)"\)
 // - Nothing matches → allowed (nil)
 // Returns the result, the one-time signals that changed a rule's outcome, and any error.
 func Evaluate(guard *Guard, state *State, event ToolEvent) (*Result, map[string]bool, error) {
-	return EvaluateVerbose(guard, state, event, nil, nil)
+	return EvaluateVerbose(guard, state, event, guard.repoStatus, nil)
 }
 
 // EvaluateVerbose is like Evaluate but writes debug info to verbose when non-nil.

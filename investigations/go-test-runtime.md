@@ -29,10 +29,11 @@
 | Consolidate and reuse repository snapshots | Git process fan-out dominates the first runtime segment | Full suite passes in 28.373 seconds, down from 65.532 seconds | Git as the only remaining bottleneck | Repeated process startup; Bash facts remain |
 | Disable fsmonitor in ephemeral test repos | Temporary repos leak filesystem monitors and add startup cost | Full suite passes in 25.437 seconds and a focused real-Git run creates zero daemons | Ordinary temp filesystem I/O as the cause | Inherited fsmonitor config was a real secondary cause |
 | Inject exact constant fact fixtures | Repeated Bash startup dominates policy unit tests | Full suite passes in 19.112 seconds while a dedicated test still executes both real fixture commands | Fact computation itself as the cost | Redundant Bash startup for constant test values |
+| Inject exact repository snapshots into policy tests | Live Git discovery is redundant when a policy test already defines repository state | Dirty-tree policy tests pass in 0.159 seconds; full suite passes in 14.890 seconds | CEL evaluation or filesystem fixtures as the cost | Redundant live repository discovery |
 
 ## Current Best Theory
 
-Repeated external-process startup is the root cause. Consolidating repository status into one porcelain-v2 invocation and reusing one snapshot removed 37.159 seconds. Disabling inherited fsmonitor in temporary repositories removed another 2.936 seconds and stopped the daemon leak. Injecting the exact constant fact fixtures removed 6.325 seconds while retaining dedicated command-backed fact coverage. Real-Git higher-level tests are now the dominant avoidable cost.
+Repeated external-process startup is the root cause. Consolidating repository status into one porcelain-v2 invocation and reusing one snapshot removed 37.159 seconds. Disabling inherited fsmonitor in temporary repositories removed another 2.936 seconds and stopped the daemon leak. Exact fact and repository fixtures removed another 10.547 seconds while retaining dedicated command-backed fact and real repository-status coverage. The remaining real-Git higher-level tests are the dominant avoidable cost.
 
 ## Open Questions
 
@@ -40,4 +41,4 @@ Repeated external-process startup is the root cause. Consolidating repository st
 
 ## Next Action
 
-Commit the measured fact-fixture improvement, then keep one real `ComputeRepoStatus` integration test and supply exact repository snapshots to higher-level policy tests through the existing evaluation seam.
+Commit the measured repository-fixture improvement, then remove real Git setup from higher-level cross-repository policy tests while keeping `TestComputeRepoStatus` as the real integration authority.

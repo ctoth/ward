@@ -26,6 +26,7 @@ func loadTestGuard(t *testing.T) *Guard {
 		"git_branch":    "main",
 		"has_pyproject": true,
 	}
+	guard.repoStatus = &RepoStatus{Clean: true}
 	return guard
 }
 
@@ -527,8 +528,7 @@ func TestEvaluateSafeCommandAllow(t *testing.T) {
 	}
 }
 
-// gitBashEvent builds a Bash ToolEvent whose CWD is a real git repo, so
-// repoActivation computes live git status for that tree.
+// gitBashEvent builds a Bash ToolEvent with parsed Git command metadata.
 func gitBashEvent(t *testing.T, dir, command string) ToolEvent {
 	t.Helper()
 	event := ToolEvent{
@@ -545,21 +545,20 @@ func gitBashEvent(t *testing.T, dir, command string) ToolEvent {
 // untracked files across a switch. The no-dirty-tree-switch guard must not fire.
 func TestEvaluateDirtyTreeSwitchUntrackedAllow(t *testing.T) {
 	guard := loadTestGuard(t)
-	repo := initTestRepo(t)
-	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("one\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	gitRun(t, repo, "add", "tracked.txt")
-	gitRun(t, repo, "commit", "-m", "initial")
-	// Only an untracked file remains — no staged/unstaged tracked changes.
-	if err := os.WriteFile(filepath.Join(repo, "notes.md"), []byte("scratch\n"), 0o644); err != nil {
-		t.Fatal(err)
+	repo := t.TempDir()
+	status := &RepoStatus{
+		InGit:          true,
+		Root:           NormalizePath(repo),
+		Branch:         "main",
+		HasUntracked:   true,
+		DirtyPaths:     []string{"notes.md"},
+		UntrackedPaths: []string{"notes.md"},
 	}
 
 	state := NewState("implementing")
 	event := gitBashEvent(t, repo, "git checkout other-branch")
 
-	result, _, err := Evaluate(guard, state, event)
+	result, _, err := EvaluateVerbose(guard, state, event, status, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -572,21 +571,20 @@ func TestEvaluateDirtyTreeSwitchUntrackedAllow(t *testing.T) {
 // the guard must still deny.
 func TestEvaluateDirtyTreeSwitchUnstagedDeny(t *testing.T) {
 	guard := loadTestGuard(t)
-	repo := initTestRepo(t)
-	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("one\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	gitRun(t, repo, "add", "tracked.txt")
-	gitRun(t, repo, "commit", "-m", "initial")
-	// Unstaged modification to a tracked file.
-	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("two\n"), 0o644); err != nil {
-		t.Fatal(err)
+	repo := t.TempDir()
+	status := &RepoStatus{
+		InGit:         true,
+		Root:          NormalizePath(repo),
+		Branch:        "main",
+		HasUnstaged:   true,
+		DirtyPaths:    []string{"tracked.txt"},
+		UnstagedPaths: []string{"tracked.txt"},
 	}
 
 	state := NewState("implementing")
 	event := gitBashEvent(t, repo, "git checkout other-branch")
 
-	result, _, err := Evaluate(guard, state, event)
+	result, _, err := EvaluateVerbose(guard, state, event, status, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -597,21 +595,21 @@ func TestEvaluateDirtyTreeSwitchUnstagedDeny(t *testing.T) {
 
 func TestEvaluateDirtyTreeSwitchSignalAllowsExplicitOverride(t *testing.T) {
 	guard := loadTestGuard(t)
-	repo := initTestRepo(t)
-	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("one\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	gitRun(t, repo, "add", "tracked.txt")
-	gitRun(t, repo, "commit", "-m", "initial")
-	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("two\n"), 0o644); err != nil {
-		t.Fatal(err)
+	repo := t.TempDir()
+	status := &RepoStatus{
+		InGit:         true,
+		Root:          NormalizePath(repo),
+		Branch:        "main",
+		HasUnstaged:   true,
+		DirtyPaths:    []string{"tracked.txt"},
+		UnstagedPaths: []string{"tracked.txt"},
 	}
 
 	state := NewState("implementing")
 	state.Signals["dirty-tree-switch"] = Signal{OneTimeUse: true}
 	event := gitBashEvent(t, repo, "git switch main")
 
-	result, checkedSignals, err := Evaluate(guard, state, event)
+	result, checkedSignals, err := EvaluateVerbose(guard, state, event, status, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -626,21 +624,21 @@ func TestEvaluateDirtyTreeSwitchSignalAllowsExplicitOverride(t *testing.T) {
 
 func TestEvaluateUnrelatedCommandDoesNotConsumeDirtyTreeSwitchSignal(t *testing.T) {
 	guard := loadTestGuard(t)
-	repo := initTestRepo(t)
-	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("one\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	gitRun(t, repo, "add", "tracked.txt")
-	gitRun(t, repo, "commit", "-m", "initial")
-	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("two\n"), 0o644); err != nil {
-		t.Fatal(err)
+	repo := t.TempDir()
+	status := &RepoStatus{
+		InGit:         true,
+		Root:          NormalizePath(repo),
+		Branch:        "main",
+		HasUnstaged:   true,
+		DirtyPaths:    []string{"tracked.txt"},
+		UnstagedPaths: []string{"tracked.txt"},
 	}
 
 	state := NewState("implementing")
 	state.Signals["dirty-tree-switch"] = Signal{OneTimeUse: true}
 	event := gitBashEvent(t, repo, "git status --short")
 
-	result, checkedSignals, err := Evaluate(guard, state, event)
+	result, checkedSignals, err := EvaluateVerbose(guard, state, event, status, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
