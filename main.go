@@ -608,7 +608,7 @@ func cmdStatus() {
 	if hasExactFlag(os.Args, "--json") {
 		encoder := json.NewEncoder(os.Stdout)
 		encoder.SetIndent("", "  ")
-		if err := encoder.Encode(state); err != nil {
+		if err := encoder.Encode(actorStatusMap(key, state)); err != nil {
 			fmt.Fprintf(os.Stderr, "ward: status: encode JSON: %v\n", err)
 			os.Exit(1)
 		}
@@ -630,6 +630,24 @@ func cmdStatus() {
 	fmt.Printf("session owned: %s\n", strings.Join(pathDifference(state.TouchedFiles, state.BaselineDirtyPaths), ", "))
 	fmt.Printf("adopted: %s\n", strings.Join(state.AdoptedPaths, ", "))
 	fmt.Printf("discardable: %s\n", strings.Join(state.DiscardablePaths, ", "))
+}
+
+func actorStatusMap(key StateKey, state *State) map[string]any {
+	status := state.ToMap()
+	delete(status, "history")
+	signalNames := make([]string, 0, len(state.Signals))
+	for name := range state.Signals {
+		signalNames = append(signalNames, name)
+	}
+	sort.Strings(signalNames)
+	status["schema_version"] = state.SchemaVersion
+	status["session_key"] = key.SessionKey
+	status["actor_key"] = key.ActorKey
+	status["agent_type"] = state.AgentType
+	status["phase_stack"] = stringListToAny(state.PhaseStack)
+	status["signals"] = stringListToAny(signalNames)
+	status["pending_tool_count"] = int64(len(state.PendingTools))
+	return status
 }
 
 func cmdGrantPaths(kind string) {

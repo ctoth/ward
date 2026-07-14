@@ -19,6 +19,7 @@ func TestStatusCLIReadsActorStateWithoutMutation(t *testing.T) {
 	state.Signals["approved"] = Signal{OneTimeUse: true}
 	state.RepoRoot = "C:/repo"
 	state.TouchedFiles = []string{"generated.txt"}
+	state.PendingTools["internal-tool"] = ToolSnapshot{RepoRoot: "C:/repo"}
 	if err := SaveState(key, state); err != nil {
 		t.Fatal(err)
 	}
@@ -37,18 +38,30 @@ func TestStatusCLIReadsActorStateWithoutMutation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ward status: %v\n%s", err, output)
 	}
-	var got State
+	var got map[string]any
 	if err := json.Unmarshal(output, &got); err != nil {
 		t.Fatalf("decode status output %q: %v", output, err)
 	}
-	if got.SessionKey != session || got.ActorKey != key.ActorKey || got.Phase != "testing" {
+	if got["session_key"] != session || got["actor_key"] != key.ActorKey || got["phase"] != "testing" {
 		t.Fatalf("status = %#v, want selected actor in testing phase", got)
 	}
-	if len(got.PhaseStack) != 1 || got.PhaseStack[0] != "implementing" {
-		t.Fatalf("phase stack = %#v, want implementing", got.PhaseStack)
+	phaseStack, phaseStackOK := got["phase_stack"].([]any)
+	if !phaseStackOK || len(phaseStack) != 1 || phaseStack[0] != "implementing" {
+		t.Fatalf("phase stack = %#v, want implementing", phaseStack)
 	}
-	if _, ok := got.Signals["approved"]; !ok {
-		t.Fatalf("signals = %#v, want approved", got.Signals)
+	signals, signalsOK := got["signals"].([]any)
+	if !signalsOK || len(signals) != 1 || signals[0] != "approved" {
+		t.Fatalf("signals = %#v, want approved", signals)
+	}
+	owned, ownedOK := got["session_owned_paths"].([]any)
+	if !ownedOK || len(owned) != 1 || owned[0] != "generated.txt" {
+		t.Fatalf("session owned paths = %#v, want generated.txt", owned)
+	}
+	if got["pending_tool_count"] != float64(1) {
+		t.Fatalf("pending tool count = %#v, want 1", got["pending_tool_count"])
+	}
+	if _, exposed := got["pending_tools"]; exposed {
+		t.Fatal("ward status exposed internal pending tool snapshots")
 	}
 
 	after, err := os.ReadFile(statePath(key))

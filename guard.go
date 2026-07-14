@@ -273,6 +273,7 @@ func CompileRule(r *Rule) error {
 // Session State
 
 const maxHistory = 100
+const maxPendingTools = 100
 
 const (
 	CurrentStateSchemaVersion = 1
@@ -318,8 +319,9 @@ type State struct {
 // ToolSnapshot records the repository state before one correlated tool call.
 // Its post-tool delta attributes actual filesystem effects to the actor.
 type ToolSnapshot struct {
-	RepoRoot   string   `json:"repo_root"`
-	DirtyPaths []string `json:"dirty_paths,omitempty"`
+	RepoRoot   string    `json:"repo_root"`
+	DirtyPaths []string  `json:"dirty_paths,omitempty"`
+	CapturedAt time.Time `json:"captured_at,omitempty"`
 }
 
 // RepoScope is one repository's parked tracking state.
@@ -387,9 +389,21 @@ func (s *State) UpdateEvent(event ToolEvent, status *RepoStatus) {
 		if s.PendingTools == nil {
 			s.PendingTools = make(map[string]ToolSnapshot)
 		}
+		if _, replacing := s.PendingTools[event.ToolUseID]; !replacing && len(s.PendingTools) >= maxPendingTools {
+			oldestID := ""
+			var oldestAt time.Time
+			for id, snapshot := range s.PendingTools {
+				if oldestID == "" || snapshot.CapturedAt.Before(oldestAt) || snapshot.CapturedAt.Equal(oldestAt) && id < oldestID {
+					oldestID = id
+					oldestAt = snapshot.CapturedAt
+				}
+			}
+			delete(s.PendingTools, oldestID)
+		}
 		s.PendingTools[event.ToolUseID] = ToolSnapshot{
 			RepoRoot:   NormalizePath(status.Root),
 			DirtyPaths: append([]string(nil), status.DirtyPaths...),
+			CapturedAt: time.Now(),
 		}
 	}
 

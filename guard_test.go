@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -2297,5 +2298,30 @@ func TestStateUpdateEventAttributesFailedToolDirtyDelta(t *testing.T) {
 	}
 	if len(state.PendingTools) != 0 {
 		t.Fatalf("pending tools = %#v, want failed tool removed", state.PendingTools)
+	}
+}
+
+func TestStateUpdateEventCapsPendingToolSnapshots(t *testing.T) {
+	repo := NormalizePath(t.TempDir())
+	status := &RepoStatus{InGit: true, Root: repo}
+	state := NewState("implementing")
+	state.SyncRepo(status)
+
+	for i := 0; i < 101; i++ {
+		state.UpdateEvent(ToolEvent{
+			Tool:      "Bash",
+			EventType: "pre_tool",
+			ToolUseID: fmt.Sprintf("tool-%03d", i),
+		}, status)
+	}
+
+	if len(state.PendingTools) != 100 {
+		t.Fatalf("pending tools = %d, want hard cap of 100", len(state.PendingTools))
+	}
+	if _, exists := state.PendingTools["tool-000"]; exists {
+		t.Fatal("oldest pending tool was not evicted")
+	}
+	if _, exists := state.PendingTools["tool-100"]; !exists {
+		t.Fatal("newest pending tool was not retained")
 	}
 }
