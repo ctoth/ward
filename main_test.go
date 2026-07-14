@@ -387,7 +387,7 @@ func TestUninitializedWorkerCannotMutateMain(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := UpdateState(workerKey, UninitializedPhase, func(state *State) error {
-		state.Update("Bash", map[string]any{})
+		state.UpdateEvent(ToolEvent{Tool: "Bash", Input: map[string]any{}, EventType: "pre_tool"}, nil)
 		return nil
 	}); err != nil {
 		t.Fatal(err)

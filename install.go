@@ -23,6 +23,13 @@ func wardHookSpecs(host string) []captainhook.HookSpec {
 			Timeout: 5,
 		},
 		{
+			Event:   "PostToolUse",
+			Matcher: "*",
+			Command: exe,
+			Args:    []string{"eval"},
+			Timeout: 5,
+		},
+		{
 			Event:   "SubagentStart",
 			Command: exe,
 			Args:    []string{"start-actor"},
@@ -34,11 +41,20 @@ func wardHookSpecs(host string) []captainhook.HookSpec {
 		},
 	}
 	if host == "claude" {
-		specs = append(specs, captainhook.HookSpec{
-			Event:   "SessionEnd",
-			Command: exe,
-			Args:    []string{"end-session"},
-		})
+		specs = append(specs,
+			captainhook.HookSpec{
+				Event:   "PostToolUseFailure",
+				Matcher: "*",
+				Command: exe,
+				Args:    []string{"eval"},
+				Timeout: 5,
+			},
+			captainhook.HookSpec{
+				Event:   "SessionEnd",
+				Command: exe,
+				Args:    []string{"end-session"},
+			},
+		)
 	}
 	if host == "codex" {
 		for i := range specs {

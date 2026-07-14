@@ -127,9 +127,54 @@ func TestDetectCodexClaudeCompatiblePayload(t *testing.T) {
 	if event.SessionID != "codex-session" {
 		t.Fatalf("session = %q, want codex-session", event.SessionID)
 	}
+	if event.ToolUseID != "tool-1" {
+		t.Fatalf("tool use id = %q, want tool-1", event.ToolUseID)
+	}
 	commands, ok := event.Input["commands"].([]any)
 	if !ok || len(commands) != 1 {
 		t.Fatalf("commands = %#v, want one parsed command", event.Input["commands"])
+	}
+}
+
+func TestDetectCodexPostToolUsePreservesCorrelation(t *testing.T) {
+	data := []byte(`{
+		"session_id":"codex-session",
+		"turn_id":"codex-turn",
+		"cwd":"C:/repo",
+		"hook_event_name":"PostToolUse",
+		"tool_name":"Bash",
+		"tool_input":{"command":"uv run generator.py"},
+		"tool_use_id":"tool-2"
+	}`)
+
+	event, agent, err := DetectAndParse(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agent != AgentClaude {
+		t.Fatalf("agent = %v, want Claude-compatible", agent)
+	}
+	if event.EventType != "post_tool" || event.ToolUseID != "tool-2" || event.ToolFailed {
+		t.Fatalf("post event = %#v, want correlated successful post_tool", event)
+	}
+}
+
+func TestDetectClaudePostToolUseFailurePreservesCorrelation(t *testing.T) {
+	data := []byte(`{
+		"session_id":"claude-session",
+		"cwd":"C:/repo",
+		"hook_event_name":"PostToolUseFailure",
+		"tool_name":"Bash",
+		"tool_input":{"command":"uv run generator.py"},
+		"tool_use_id":"tool-3"
+	}`)
+
+	event, _, err := DetectAndParse(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event.EventType != "post_tool" || event.ToolUseID != "tool-3" || !event.ToolFailed {
+		t.Fatalf("failure event = %#v, want correlated failed post_tool", event)
 	}
 }
 

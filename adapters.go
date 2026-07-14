@@ -27,14 +27,16 @@ func (a AgentType) String() string {
 
 // ToolEvent is the normalized representation of a tool call from any agent.
 type ToolEvent struct {
-	Tool      string         // "Bash", "Edit", "Write", "Read", etc.
-	Input     map[string]any // tool-specific input
-	SessionID string
-	AgentID   string // stable actor identity supplied by the host
-	AgentType string // role metadata; never part of the storage key
-	EventType string // "pre_tool", "post_tool"
-	CWD       string
-	Parsed    []ParsedCommand // typed parse of Bash commands (mirrors Input["commands"])
+	Tool       string         // "Bash", "Edit", "Write", "Read", etc.
+	Input      map[string]any // tool-specific input
+	SessionID  string
+	AgentID    string // stable actor identity supplied by the host
+	AgentType  string // role metadata; never part of the storage key
+	EventType  string // "pre_tool", "post_tool"
+	ToolUseID  string // correlates pre/post events for one tool invocation
+	ToolFailed bool   // true for an explicit post-tool failure event
+	CWD        string
+	Parsed     []ParsedCommand // typed parse of Bash commands (mirrors Input["commands"])
 }
 
 // DetectAndParse auto-detects which agent sent the JSON and parses it.
@@ -216,10 +218,12 @@ func parentDir(path string) string {
 
 func parseClaude(raw map[string]any, eventName string) (ToolEvent, AgentType, error) {
 	event := ToolEvent{
-		SessionID: strField(raw, "session_id"),
-		AgentID:   strField(raw, "agent_id"),
-		AgentType: strField(raw, "agent_type"),
-		CWD:       strField(raw, "cwd"),
+		SessionID:  strField(raw, "session_id"),
+		AgentID:    strField(raw, "agent_id"),
+		AgentType:  strField(raw, "agent_type"),
+		ToolUseID:  strField(raw, "tool_use_id"),
+		ToolFailed: eventName == "PostToolUseFailure",
+		CWD:        strField(raw, "cwd"),
 	}
 
 	event.Tool = strField(raw, "tool_name")
@@ -248,7 +252,11 @@ func parseGemini(raw map[string]any, eventName string) (ToolEvent, AgentType, er
 		SessionID: strField(raw, "session_id"),
 		AgentID:   strField(raw, "agent_id"),
 		AgentType: strField(raw, "agent_type"),
+		ToolUseID: strField(raw, "tool_use_id"),
 		CWD:       strField(raw, "cwd"),
+	}
+	if event.ToolUseID == "" {
+		event.ToolUseID = strField(raw, "tool_call_id")
 	}
 
 	event.Tool = strField(raw, "tool_name")

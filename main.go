@@ -494,13 +494,16 @@ func cmdEval() {
 			state.AgentType = event.AgentType
 		}
 		effectiveRepoDir := EffectiveRepoDir(event, state.RepoRoot)
+		repoStatus, _ := ComputeRepoStatus(effectiveRepoDir)
+		state.SyncRepo(repoStatus)
+		state.UpdateEvent(event, repoStatus)
+		if event.EventType == "post_tool" {
+			return nil
+		}
 		guard, err := loadGuard(effectiveRepoDir)
 		if err != nil {
 			return fmt.Errorf("load config: %w", err)
 		}
-		repoStatus, _ := ComputeRepoStatus(effectiveRepoDir)
-		state.SyncRepo(repoStatus)
-		state.Update(event.Tool, event.Input)
 		var matchedSignals map[string]bool
 		var evalErr error
 		result, matchedSignals, evalErr = EvaluateVerbose(guard, state, event, repoStatus, verboseWriter)

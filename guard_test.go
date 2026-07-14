@@ -216,12 +216,16 @@ func TestNewState(t *testing.T) {
 	}
 }
 
+func updateStateForTest(state *State, tool string, input map[string]any) {
+	state.UpdateEvent(ToolEvent{Tool: tool, Input: input, EventType: "pre_tool"}, nil)
+}
+
 func TestStateHistory(t *testing.T) {
 	s := NewState("implementing")
 
-	s.Update("Read", nil)
-	s.Update("Read", nil)
-	s.Update("Read", nil)
+	updateStateForTest(s, "Read", nil)
+	updateStateForTest(s, "Read", nil)
+	updateStateForTest(s, "Read", nil)
 
 	if len(s.History) != 3 {
 		t.Errorf("expected 3 history entries, got %d", len(s.History))
@@ -232,7 +236,7 @@ func TestStateHistory(t *testing.T) {
 		}
 	}
 
-	s.Update("Bash", map[string]any{"command": "ls"})
+	updateStateForTest(s, "Bash", map[string]any{"command": "ls"})
 	if len(s.History) != 4 {
 		t.Errorf("expected 4 history entries, got %d", len(s.History))
 	}
@@ -244,9 +248,9 @@ func TestStateHistory(t *testing.T) {
 func TestStateCommitMarker(t *testing.T) {
 	s := NewState("implementing")
 
-	s.Update("Edit", nil)
-	s.Update("Write", nil)
-	s.Update("Bash", map[string]any{"command": "git commit -m 'test'"})
+	updateStateForTest(s, "Edit", nil)
+	updateStateForTest(s, "Write", nil)
+	updateStateForTest(s, "Bash", map[string]any{"command": "git commit -m 'test'"})
 
 	// Should have: Edit, Write, _commit, Bash
 	expected := []string{"Edit", "Write", "_commit", "Bash"}
@@ -263,9 +267,9 @@ func TestStateCommitMarker(t *testing.T) {
 func TestStateCommitMarkerIgnoresRawMention(t *testing.T) {
 	s := NewState("implementing")
 
-	s.Update("Edit", nil)
-	s.Update("Bash", map[string]any{"command": "echo git commit"})
-	s.Update("Edit", nil)
+	updateStateForTest(s, "Edit", nil)
+	updateStateForTest(s, "Bash", map[string]any{"command": "echo git commit"})
+	updateStateForTest(s, "Edit", nil)
 
 	expected := []string{"Edit", "Bash", "Edit"}
 	if len(s.History) != len(expected) {
@@ -281,7 +285,7 @@ func TestStateCommitMarkerIgnoresRawMention(t *testing.T) {
 func TestStateHistoryCap(t *testing.T) {
 	s := NewState("implementing")
 	for i := 0; i < 110; i++ {
-		s.Update("Read", nil)
+		updateStateForTest(s, "Read", nil)
 	}
 	if len(s.History) != maxHistory {
 		t.Errorf("expected history capped at %d, got %d", maxHistory, len(s.History))
@@ -1084,7 +1088,7 @@ func TestActorUpdatesAreRaceSafeAndSameActorIsSerialized(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				if err := UpdateState(key, "scout", func(state *State) error {
-					state.Update("Bash", map[string]any{})
+					updateStateForTest(state, "Bash", map[string]any{})
 					state.Signals[key.ActorKey] = Signal{OneTimeUse: false}
 					state.AdoptedPaths = appendUniquePath(state.AdoptedPaths, key.ActorKey+".txt")
 					return nil
@@ -1118,7 +1122,7 @@ func TestActorUpdatesAreRaceSafeAndSameActorIsSerialized(t *testing.T) {
 		errors <- UpdateState(serializedKey, "scout", func(state *State) error {
 			close(firstEntered)
 			<-releaseFirst
-			state.Update("Read", map[string]any{})
+			updateStateForTest(state, "Read", map[string]any{})
 			return nil
 		})
 	}()
@@ -1126,7 +1130,7 @@ func TestActorUpdatesAreRaceSafeAndSameActorIsSerialized(t *testing.T) {
 	go func() {
 		close(secondLaunched)
 		errors <- UpdateState(serializedKey, "scout", func(state *State) error {
-			state.Update("Bash", map[string]any{})
+			updateStateForTest(state, "Bash", map[string]any{})
 			return nil
 		})
 	}()
@@ -1951,7 +1955,7 @@ func TestCrossRepoWriteRecordsTouchInTargetRepoScope(t *testing.T) {
 	// 1. Agent inspects the sibling repo (parses as git in B, baselines B).
 	inspectEvent := gitBashEvent(t, repoA, "cd "+repoBFwd+" && git status")
 	state.SyncRepo(statusB)
-	state.Update(inspectEvent.Tool, inspectEvent.Input)
+	state.UpdateEvent(inspectEvent, statusB)
 
 	// 2. Agent writes a new file into B; the event's cwd is still A.
 	if err := os.WriteFile(filepath.Join(repoB, "src.txt"), []byte("new\n"), 0o644); err != nil {
@@ -1972,12 +1976,13 @@ func TestCrossRepoWriteRecordsTouchInTargetRepoScope(t *testing.T) {
 		UntrackedPaths: []string{"src.txt", "unowned.txt"},
 	}
 	state.SyncRepo(statusB)
-	state.Update(writeEvent.Tool, writeEvent.Input)
+	writeEvent.EventType = "pre_tool"
+	state.UpdateEvent(writeEvent, statusB)
 
 	// 3. Staging the agent's own file in B must not deny.
 	event := gitBashEvent(t, repoA, "cd "+repoBFwd+" && git add src.txt")
 	state.SyncRepo(statusB)
-	state.Update(event.Tool, event.Input)
+	state.UpdateEvent(event, statusB)
 	result, _, err := EvaluateVerbose(guard, state, event, statusB, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -1989,7 +1994,7 @@ func TestCrossRepoWriteRecordsTouchInTargetRepoScope(t *testing.T) {
 	// 4. Pre-existing dirt in B still denies.
 	event = gitBashEvent(t, repoA, "cd "+repoBFwd+" && git add unowned.txt")
 	state.SyncRepo(statusB)
-	state.Update(event.Tool, event.Input)
+	state.UpdateEvent(event, statusB)
 	result, _, err = EvaluateVerbose(guard, state, event, statusB, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -2194,7 +2199,7 @@ func TestCodexApplyPatchOwnsSiblingRepoPathForStaging(t *testing.T) {
 		UnstagedPaths: []string{"owned.txt"},
 	}
 	state.SyncRepo(patchStatus)
-	state.Update(patchEvent.Tool, patchEvent.Input)
+	state.UpdateEvent(patchEvent, patchStatus)
 
 	if state.RepoRoot != NormalizePath(repoB) {
 		t.Fatalf("patch repo root = %q, want %q", state.RepoRoot, NormalizePath(repoB))
@@ -2214,5 +2219,82 @@ func TestCodexApplyPatchOwnsSiblingRepoPathForStaging(t *testing.T) {
 	}
 	if result != nil {
 		t.Fatalf("staging parent-authored apply_patch path denied: %+v", result)
+	}
+}
+
+func TestStateUpdateEventAttributesSuccessfulPostToolDirtyDelta(t *testing.T) {
+	repo := NormalizePath(t.TempDir())
+	state := NewState("implementing")
+	before := &RepoStatus{
+		InGit:      true,
+		Root:       repo,
+		DirtyPaths: []string{"preexisting.txt"},
+	}
+	state.SyncRepo(before)
+	state.UpdateEvent(ToolEvent{
+		Tool:      "Bash",
+		EventType: "pre_tool",
+		ToolUseID: "tool-generate",
+		CWD:       repo,
+	}, before)
+
+	after := &RepoStatus{
+		InGit:      true,
+		Root:       repo,
+		DirtyPaths: []string{"preexisting.txt", "generated.txt"},
+	}
+	state.SyncRepo(after)
+	state.UpdateEvent(ToolEvent{
+		Tool:      "Bash",
+		EventType: "post_tool",
+		ToolUseID: "tool-generate",
+		CWD:       repo,
+	}, after)
+
+	if len(state.TouchedFiles) != 1 || state.TouchedFiles[0] != "generated.txt" {
+		t.Fatalf("touched files = %#v, want only generated.txt", state.TouchedFiles)
+	}
+	if len(state.TouchedSinceCommit) != 1 || state.TouchedSinceCommit[0] != "generated.txt" {
+		t.Fatalf("touched since commit = %#v, want only generated.txt", state.TouchedSinceCommit)
+	}
+	if len(state.History) != 1 || state.History[0] != "Bash" {
+		t.Fatalf("history = %#v, want one pre-tool Bash entry", state.History)
+	}
+	if len(state.PendingTools) != 0 {
+		t.Fatalf("pending tools = %#v, want completed tool removed", state.PendingTools)
+	}
+}
+
+func TestStateUpdateEventAttributesFailedToolDirtyDelta(t *testing.T) {
+	repo := NormalizePath(t.TempDir())
+	state := NewState("implementing")
+	before := &RepoStatus{InGit: true, Root: repo}
+	state.SyncRepo(before)
+	state.UpdateEvent(ToolEvent{
+		Tool:      "Bash",
+		EventType: "pre_tool",
+		ToolUseID: "tool-failed",
+		CWD:       repo,
+	}, before)
+
+	after := &RepoStatus{
+		InGit:      true,
+		Root:       repo,
+		DirtyPaths: []string{"partial.txt"},
+	}
+	state.SyncRepo(after)
+	state.UpdateEvent(ToolEvent{
+		Tool:       "Bash",
+		EventType:  "post_tool",
+		ToolUseID:  "tool-failed",
+		ToolFailed: true,
+		CWD:        repo,
+	}, after)
+
+	if len(state.TouchedFiles) != 1 || state.TouchedFiles[0] != "partial.txt" {
+		t.Fatalf("failed tool touched files = %#v, want partial.txt", state.TouchedFiles)
+	}
+	if len(state.PendingTools) != 0 {
+		t.Fatalf("pending tools = %#v, want failed tool removed", state.PendingTools)
 	}
 }

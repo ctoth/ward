@@ -68,8 +68,8 @@ func TestStateSyncRepoAndTouchedFiles(t *testing.T) {
 		t.Fatalf("unexpected baseline dirty paths: %#v", state.BaselineDirtyPaths)
 	}
 
-	state.Update("Edit", map[string]any{"file_path": `C:\repo\agent.txt`})
-	state.Update("Bash", map[string]any{"command": "git commit -m test"})
+	state.UpdateEvent(ToolEvent{Tool: "Edit", Input: map[string]any{"file_path": `C:\repo\agent.txt`}, EventType: "pre_tool"}, status)
+	state.UpdateEvent(ToolEvent{Tool: "Bash", Input: map[string]any{"command": "git commit -m test"}, EventType: "pre_tool"}, status)
 
 	if len(state.TouchedFiles) != 1 || state.TouchedFiles[0] != "agent.txt" {
 		t.Fatalf("unexpected touched files: %#v", state.TouchedFiles)
@@ -85,7 +85,7 @@ func TestSyncRepoParksAndRestoresScopeAcrossRootSwitch(t *testing.T) {
 	repoB := &RepoStatus{InGit: true, Root: "C:/repo-b", DirtyPaths: []string{"pre-b.txt"}}
 
 	state.SyncRepo(repoA)
-	state.Update("Edit", map[string]any{"file_path": "C:/repo-a/agent-a.txt"})
+	state.UpdateEvent(ToolEvent{Tool: "Edit", Input: map[string]any{"file_path": "C:/repo-a/agent-a.txt"}, EventType: "pre_tool"}, repoA)
 	state.AdoptedPaths = []string{"adopted-a.txt"}
 
 	// Switching repos must PARK repo-a's scope, not destroy it — an agent
@@ -100,7 +100,7 @@ func TestSyncRepoParksAndRestoresScopeAcrossRootSwitch(t *testing.T) {
 	if len(state.BaselineDirtyPaths) != 1 || state.BaselineDirtyPaths[0] != "pre-b.txt" {
 		t.Fatalf("unexpected repo-b baseline: %#v", state.BaselineDirtyPaths)
 	}
-	state.Update("Edit", map[string]any{"file_path": "C:/repo-b/agent-b.txt"})
+	state.UpdateEvent(ToolEvent{Tool: "Edit", Input: map[string]any{"file_path": "C:/repo-b/agent-b.txt"}, EventType: "pre_tool"}, repoB)
 
 	// Returning restores repo-a's scope intact.
 	state.SyncRepo(repoA)

@@ -292,26 +292,34 @@ type Signal struct {
 }
 
 type State struct {
-	SchemaVersion      int               `json:"schema_version"`
-	SessionKey         string            `json:"session_key"`
-	ActorKey           string            `json:"actor_key"`
-	AgentType          string            `json:"agent_type,omitempty"`
-	Phase              string            `json:"phase"`
-	PhaseStack         []string          `json:"phase_stack,omitempty"`
-	History            []string          `json:"history"`
-	Signals            map[string]Signal `json:"signals"`
-	StartedAt          time.Time         `json:"started_at"`
-	RepoRoot           string            `json:"repo_root,omitempty"`
-	BaselineDirtyPaths []string          `json:"baseline_dirty_paths,omitempty"`
-	TouchedFiles       []string          `json:"touched_files,omitempty"`
-	TouchedSinceCommit []string          `json:"touched_since_commit,omitempty"`
-	AdoptedPaths       []string          `json:"adopted_paths,omitempty"`
-	DiscardablePaths   []string          `json:"discardable_paths,omitempty"`
+	SchemaVersion      int                     `json:"schema_version"`
+	SessionKey         string                  `json:"session_key"`
+	ActorKey           string                  `json:"actor_key"`
+	AgentType          string                  `json:"agent_type,omitempty"`
+	Phase              string                  `json:"phase"`
+	PhaseStack         []string                `json:"phase_stack,omitempty"`
+	History            []string                `json:"history"`
+	Signals            map[string]Signal       `json:"signals"`
+	StartedAt          time.Time               `json:"started_at"`
+	RepoRoot           string                  `json:"repo_root,omitempty"`
+	BaselineDirtyPaths []string                `json:"baseline_dirty_paths,omitempty"`
+	TouchedFiles       []string                `json:"touched_files,omitempty"`
+	TouchedSinceCommit []string                `json:"touched_since_commit,omitempty"`
+	AdoptedPaths       []string                `json:"adopted_paths,omitempty"`
+	DiscardablePaths   []string                `json:"discardable_paths,omitempty"`
+	PendingTools       map[string]ToolSnapshot `json:"pending_tools,omitempty"`
 	// RepoScopes preserves per-repo tracking when the actor's tool calls move
 	// between git repositories. The flat fields above always describe the
 	// CURRENT RepoRoot; scopes for other roots are parked here and restored
 	// when the actor returns, instead of being destroyed on every switch.
 	RepoScopes map[string]*RepoScope `json:"repo_scopes,omitempty"`
+}
+
+// ToolSnapshot records the repository state before one correlated tool call.
+// Its post-tool delta attributes actual filesystem effects to the actor.
+type ToolSnapshot struct {
+	RepoRoot   string   `json:"repo_root"`
+	DirtyPaths []string `json:"dirty_paths,omitempty"`
 }
 
 // RepoScope is one repository's parked tracking state.
@@ -338,6 +346,7 @@ func NewState(phase string) *State {
 		TouchedSinceCommit: []string{},
 		AdoptedPaths:       []string{},
 		DiscardablePaths:   []string{},
+		PendingTools:       make(map[string]ToolSnapshot),
 	}
 }
 
@@ -356,8 +365,36 @@ func (s *State) LeavePhase() (string, error) {
 	return s.Phase, nil
 }
 
-func (s *State) Update(tool string, input map[string]any) {
-	toolName := canonicalToolName(tool)
+func (s *State) UpdateEvent(event ToolEvent, status *RepoStatus) {
+	if event.EventType == "post_tool" {
+		if event.ToolUseID == "" {
+			return
+		}
+		snapshot, ok := s.PendingTools[event.ToolUseID]
+		delete(s.PendingTools, event.ToolUseID)
+		if !ok || status == nil || !status.InGit || NormalizePath(status.Root) != snapshot.RepoRoot {
+			return
+		}
+		for _, filePath := range pathDifference(status.DirtyPaths, snapshot.DirtyPaths) {
+			filePath = s.normalizeTrackedPath(filePath)
+			s.TouchedFiles = appendUniquePath(s.TouchedFiles, filePath)
+			s.TouchedSinceCommit = appendUniquePath(s.TouchedSinceCommit, filePath)
+		}
+		return
+	}
+
+	if event.ToolUseID != "" && status != nil && status.InGit {
+		if s.PendingTools == nil {
+			s.PendingTools = make(map[string]ToolSnapshot)
+		}
+		s.PendingTools[event.ToolUseID] = ToolSnapshot{
+			RepoRoot:   NormalizePath(status.Root),
+			DirtyPaths: append([]string(nil), status.DirtyPaths...),
+		}
+	}
+
+	toolName := canonicalToolName(event.Tool)
+	input := event.Input
 
 	if toolName == "Edit" || toolName == "Write" {
 		var filePaths []string

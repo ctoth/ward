@@ -24,10 +24,12 @@ func TestMain(m *testing.M) {
 func TestClaudeHookSpecsUseExecFormAndIncludeSessionCleanup(t *testing.T) {
 	specs := wardHookSpecs("claude")
 	want := map[string]string{
-		"PreToolUse":    "eval",
-		"SubagentStart": "start-actor",
-		"SubagentStop":  "end-actor",
-		"SessionEnd":    "end-session",
+		"PreToolUse":         "eval",
+		"PostToolUse":        "eval",
+		"PostToolUseFailure": "eval",
+		"SubagentStart":      "start-actor",
+		"SubagentStop":       "end-actor",
+		"SessionEnd":         "end-session",
 	}
 	seen := make(map[string]int)
 	for _, spec := range specs {
@@ -42,8 +44,8 @@ func TestClaudeHookSpecsUseExecFormAndIncludeSessionCleanup(t *testing.T) {
 		if strings.Contains(spec.Command, suffix) {
 			t.Errorf("%s command %q contains shell-form argument %q", spec.Event, spec.Command, suffix)
 		}
-		if spec.Event == "PreToolUse" && spec.Matcher != "*" {
-			t.Errorf("PreToolUse matcher = %q, want *", spec.Matcher)
+		if (spec.Event == "PreToolUse" || spec.Event == "PostToolUse" || spec.Event == "PostToolUseFailure") && spec.Matcher != "*" {
+			t.Errorf("%s matcher = %q, want *", spec.Event, spec.Matcher)
 		}
 	}
 	for event := range want {
@@ -184,7 +186,7 @@ func TestCodexInstallAndUninstallPreserveUnrelatedHooks(t *testing.T) {
 		t.Fatal(err)
 	}
 	hooks := (*installed)["hooks"].(map[string]interface{})
-	for _, event := range []string{"PreToolUse", "SubagentStart", "SubagentStop"} {
+	for _, event := range []string{"PreToolUse", "PostToolUse", "SubagentStart", "SubagentStop"} {
 		groups, ok := hooks[event].([]interface{})
 		if !ok {
 			t.Fatalf("%s groups = %#v", event, hooks[event])
@@ -199,6 +201,9 @@ func TestCodexInstallAndUninstallPreserveUnrelatedHooks(t *testing.T) {
 	}
 	if _, exists := hooks["SessionEnd"]; exists {
 		t.Fatalf("Codex install wrote unsupported SessionEnd hook: %#v", hooks["SessionEnd"])
+	}
+	if _, exists := hooks["PostToolUseFailure"]; exists {
+		t.Fatalf("Codex install wrote unsupported PostToolUseFailure hook: %#v", hooks["PostToolUseFailure"])
 	}
 	preToolGroups := hooks["PreToolUse"].([]interface{})
 	wardGroup := preToolGroups[1].(map[string]interface{})
