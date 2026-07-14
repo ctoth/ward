@@ -22,6 +22,10 @@ func loadTestGuard(t *testing.T) *Guard {
 	if err != nil {
 		t.Fatal(err)
 	}
+	guard.factValues = map[string]any{
+		"git_branch":    "main",
+		"has_pyproject": true,
+	}
 	return guard
 }
 
@@ -87,6 +91,26 @@ func TestLoadFactsFromDir(t *testing.T) {
 	}
 	if facts["has_pyproject"].Type != "bool" {
 		t.Errorf("expected has_pyproject type 'bool', got %q", facts["has_pyproject"].Type)
+	}
+}
+
+func TestComputeFactExecutesCommands(t *testing.T) {
+	cwd := t.TempDir()
+
+	got, err := computeFact(Fact{Command: "echo true", Type: "bool"}, cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != true {
+		t.Fatalf("bool fact = %#v, want true", got)
+	}
+
+	got, err = computeFact(Fact{Command: "echo main"}, cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "main" {
+		t.Fatalf("string fact = %#v, want main", got)
 	}
 }
 

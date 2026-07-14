@@ -42,9 +42,10 @@ type Fact struct {
 
 // Guard holds compiled facts + rules, ready for evaluation.
 type Guard struct {
-	Facts map[string]Fact
-	Rules []Rule
-	env   *cel.Env
+	Facts      map[string]Fact
+	factValues map[string]any
+	Rules      []Rule
+	env        *cel.Env
 }
 
 // LoadFact reads a single fact from a YAML file.
@@ -1160,6 +1161,13 @@ func EvaluateVerbose(guard *Guard, state *State, event ToolEvent, repoStatus *Re
 	for name := range neededFacts {
 		fact, ok := guard.Facts[name]
 		if !ok {
+			continue
+		}
+		if val, ok := guard.factValues[name]; ok {
+			factsMap[name] = val
+			if verbose != nil {
+				fmt.Fprintf(verbose, "ward:   fact %s = %v\n", name, val)
+			}
 			continue
 		}
 		val, err := computeFact(fact, event.CWD)
