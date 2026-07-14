@@ -275,6 +275,85 @@ func bashEvent(t *testing.T, command string) ToolEvent {
 	return event
 }
 
+func TestEvaluateAlwaysAllowsExactWardControlPlaneCommands(t *testing.T) {
+	guard, err := NewGuard(nil, []Rule{{
+		When:    `tool in ["Bash", "PowerShell"]`,
+		Action:  "deny",
+		Message: "shell denied",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	commands := []string{
+		"ward --help",
+		"ward set coder",
+		"ward allow approved",
+		"ward adopt docs/report.md",
+		"ward discard scratch.txt",
+		"ward revoke approved",
+		"ward validate",
+		"ward start-actor worker",
+		"ward end-actor worker",
+		"ward end-session",
+		`C:\tools\ward.exe set coder`,
+	}
+	for _, tool := range []string{"Bash", "PowerShell"} {
+		for _, command := range commands {
+			t.Run(tool+"/"+command, func(t *testing.T) {
+				event := ToolEvent{
+					Tool:  tool,
+					Input: map[string]any{"command": command},
+					CWD:   t.TempDir(),
+				}
+				result, _, err := Evaluate(guard, NewState("researcher"), event)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if result != nil {
+					t.Fatalf("control-plane command denied: %+v", result)
+				}
+			})
+		}
+	}
+}
+
+func TestEvaluateDoesNotExemptWardCommandChainsOrConfigurationChanges(t *testing.T) {
+	guard, err := NewGuard(nil, []Rule{{
+		When:    `tool in ["Bash", "PowerShell"]`,
+		Action:  "deny",
+		Message: "shell denied",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	commands := []string{
+		"ward set coder; git status",
+		"ward set coder && git status",
+		"ward install-profile ./profile",
+		"ward update-profile protocols ./profile",
+		"ward remove-profile protocols",
+		"other-ward set coder",
+	}
+	for _, command := range commands {
+		t.Run(command, func(t *testing.T) {
+			event := ToolEvent{
+				Tool:  "PowerShell",
+				Input: map[string]any{"command": command},
+				CWD:   t.TempDir(),
+			}
+			result, _, err := Evaluate(guard, NewState("researcher"), event)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result == nil || result.Action != "deny" {
+				t.Fatalf("non-control-plane shell command escaped guard: %+v", result)
+			}
+		})
+	}
+}
+
 func TestEvaluatePythonCDeny(t *testing.T) {
 	guard := loadTestGuard(t)
 	state := NewState("implementing")

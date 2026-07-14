@@ -1089,6 +1089,18 @@ func Evaluate(guard *Guard, state *State, event ToolEvent) (*Result, map[string]
 // EvaluateVerbose is like Evaluate but writes debug info to verbose when non-nil.
 // Returns the result, the set of signal names referenced by matched rules, and any error.
 func EvaluateVerbose(guard *Guard, state *State, event ToolEvent, verbose io.Writer) (*Result, map[string]bool, error) {
+	// Ward's runtime control plane must remain reachable from every phase.
+	// Otherwise a phase rule that denies its shell transport can trap the actor
+	// in that phase and also deny the signal/ownership commands needed to obey
+	// the policy. Only a single, exact Ward invocation is exempt; command chains
+	// continue through normal rule evaluation.
+	if isWardControlPlaneCommand(event.Input) {
+		if verbose != nil {
+			fmt.Fprintln(verbose, "ward: control-plane command allowed")
+		}
+		return nil, map[string]bool{}, nil
+	}
+
 	sessionMap := state.ToMap()
 
 	if verbose != nil {
@@ -1390,6 +1402,33 @@ func canonicalToolName(tool string) string {
 	default:
 		return tool
 	}
+}
+
+var wardControlPlaneCommands = map[string]bool{
+	"set":         true,
+	"allow":       true,
+	"adopt":       true,
+	"discard":     true,
+	"revoke":      true,
+	"validate":    true,
+	"end-session": true,
+	"start-actor": true,
+	"end-actor":   true,
+}
+
+func isWardControlPlaneCommand(input map[string]any) bool {
+	commands := commandsFromInput(input)
+	if len(commands) != 1 {
+		return false
+	}
+	command := commands[0]
+	if command.Name != "ward" {
+		return false
+	}
+	if len(command.Args) == 1 && (command.Args[0] == "--help" || command.Args[0] == "-h") {
+		return true
+	}
+	return len(command.Args) > 0 && wardControlPlaneCommands[command.Args[0]]
 }
 
 func hasGitCommit(input map[string]any) bool {

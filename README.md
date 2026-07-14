@@ -142,6 +142,18 @@ All paths are normalized to forward slashes internally, including on Windows.
 
 ## Commands
 
+### Runtime control plane
+
+Phase rules cannot deny a single, exact invocation of Ward's runtime control
+plane: `set`, `allow`, `adopt`, `discard`, `revoke`, `validate`, `start-actor`,
+`end-actor`, or `end-session` (and `ward --help`). This prevents a restricted
+phase from blocking the command needed to leave that phase or satisfy its own
+signal and ownership rules.
+
+The exemption never applies to a shell chain containing another command, or to
+profile installation and removal commands. Those calls remain subject to the
+effective rules like any other shell command.
+
 ### `ward eval`
 
 Reads a tool call event from stdin (JSON), evaluates rules, outputs response JSON (or nothing if allowed).
