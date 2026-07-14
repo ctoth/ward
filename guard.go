@@ -1010,11 +1010,23 @@ func NormalizePath(p string) string {
 func NormalizeInput(input map[string]any) map[string]any {
 	normalized := make(map[string]any, len(input))
 	for k, v := range input {
-		if s, ok := v.(string); ok && isPathField(k) {
-			normalized[k] = NormalizePath(s)
-		} else {
+		if !isPathField(k) {
 			normalized[k] = v
+			continue
 		}
+		if s, ok := v.(string); ok {
+			normalized[k] = NormalizePath(s)
+			continue
+		}
+		if paths, ok := stringSlice(v); ok {
+			normalizedPaths := make([]string, len(paths))
+			for i, path := range paths {
+				normalizedPaths[i] = NormalizePath(path)
+			}
+			normalized[k] = normalizedPaths
+			continue
+		}
+		normalized[k] = v
 	}
 	return normalized
 }
@@ -1058,7 +1070,7 @@ func stringListToAny(items []string) []any {
 
 func isPathField(name string) bool {
 	switch name {
-	case "file_path", "path", "directory", "cwd":
+	case "file_path", "file_paths", "path", "directory", "cwd":
 		return true
 	default:
 		return false

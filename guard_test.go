@@ -771,12 +771,20 @@ func TestNormalizePath(t *testing.T) {
 
 func TestNormalizeInput(t *testing.T) {
 	input := map[string]any{
-		"file_path": `C:\Users\Q\foo.go`,
-		"command":   `echo hello`,
+		"file_path":  `C:\Users\Q\foo.go`,
+		"file_paths": []string{`C:\Users\Q\foo.go`, `docs\reports\result.md`},
+		"command":    `echo hello`,
 	}
 	norm := NormalizeInput(input)
 	if norm["file_path"] != "C:/Users/Q/foo.go" {
 		t.Errorf("expected normalized file_path, got %q", norm["file_path"])
+	}
+	paths, ok := norm["file_paths"].([]string)
+	if !ok {
+		t.Fatalf("normalized file_paths type = %T, want []string", norm["file_paths"])
+	}
+	if len(paths) != 2 || paths[0] != "C:/Users/Q/foo.go" || paths[1] != "docs/reports/result.md" {
+		t.Errorf("normalized file_paths = %#v", paths)
 	}
 	// command should NOT be normalized (not a path field)
 	if norm["command"] != "echo hello" {
