@@ -503,7 +503,7 @@ func cmdEval() {
 		state.Update(event.Tool, event.Input)
 		var matchedSignals map[string]bool
 		var evalErr error
-		result, matchedSignals, evalErr = EvaluateVerbose(guard, state, event, verboseWriter)
+		result, matchedSignals, evalErr = EvaluateVerbose(guard, state, event, repoStatus, verboseWriter)
 		if evalErr != nil {
 			return evalErr
 		}

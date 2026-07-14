@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
@@ -24,37 +25,67 @@ type RepoStatus struct {
 }
 
 func ComputeRepoStatus(cwd string) (*RepoStatus, error) {
-	rootOut, err := gitOutput(cwd, "rev-parse", "--show-toplevel")
-	if err != nil {
-		if isNotGitRepoErr(err) {
-			return &RepoStatus{Clean: true}, nil
+	root := cwd
+	if _, err := os.Stat(filepath.Join(cwd, ".git")); err != nil {
+		rootOut, gitErr := gitOutput(cwd, "rev-parse", "--show-toplevel")
+		if gitErr != nil {
+			if isNotGitRepoErr(gitErr) {
+				return &RepoStatus{Clean: true}, nil
+			}
+			return nil, gitErr
 		}
+		root = strings.TrimSpace(rootOut)
+	}
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return nil, fmt.Errorf("resolve repo root %q: %w", root, err)
+	}
+	root = NormalizePath(absRoot)
+
+	statusOut, err := gitOutput(root, "status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all", "--no-renames")
+	if err != nil {
 		return nil, err
 	}
 
-	root := NormalizePath(strings.TrimSpace(rootOut))
-	branchOut, err := gitOutput(root, "branch", "--show-current")
-	if err != nil {
-		return nil, err
-	}
-
-	staged, err := gitLines(root, "diff", "--name-only", "--cached", "--no-renames")
-	if err != nil {
-		return nil, err
-	}
-	unstaged, err := gitLines(root, "diff", "--name-only", "--no-renames")
-	if err != nil {
-		return nil, err
-	}
-	untracked, err := gitLines(root, "ls-files", "--others", "--exclude-standard")
-	if err != nil {
-		return nil, err
+	var branch string
+	var staged, unstaged, untracked []string
+	for _, record := range strings.Split(statusOut, "\x00") {
+		if record == "" {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(record, "# branch.head "):
+			branch = strings.TrimPrefix(record, "# branch.head ")
+			if branch == "(detached)" {
+				branch = ""
+			}
+		case strings.HasPrefix(record, "? "):
+			untracked = append(untracked, strings.TrimPrefix(record, "? "))
+		case strings.HasPrefix(record, "1 "):
+			fields := strings.SplitN(record, " ", 9)
+			if len(fields) != 9 || len(fields[1]) != 2 {
+				return nil, fmt.Errorf("parse git status record %q", record)
+			}
+			if fields[1][0] != '.' {
+				staged = append(staged, fields[8])
+			}
+			if fields[1][1] != '.' {
+				unstaged = append(unstaged, fields[8])
+			}
+		case strings.HasPrefix(record, "u "):
+			fields := strings.SplitN(record, " ", 11)
+			if len(fields) != 11 || len(fields[1]) != 2 {
+				return nil, fmt.Errorf("parse git status record %q", record)
+			}
+			staged = append(staged, fields[10])
+			unstaged = append(unstaged, fields[10])
+		}
 	}
 
 	status := &RepoStatus{
 		InGit:          true,
 		Root:           root,
-		Branch:         strings.TrimSpace(branchOut),
+		Branch:         branch,
 		StagedPaths:    uniquePaths(staged),
 		UnstagedPaths:  uniquePaths(unstaged),
 		UntrackedPaths: uniquePaths(untracked),
@@ -84,26 +115,6 @@ func gitOutput(dir string, args ...string) (string, error) {
 		return "", fmt.Errorf("git %s: %s", strings.Join(args, " "), msg)
 	}
 	return stdout.String(), nil
-}
-
-func gitLines(dir string, args ...string) ([]string, error) {
-	out, err := gitOutput(dir, args...)
-	if err != nil {
-		return nil, err
-	}
-	if strings.TrimSpace(out) == "" {
-		return nil, nil
-	}
-	lines := strings.Split(strings.ReplaceAll(out, "\r\n", "\n"), "\n")
-	paths := make([]string, 0, len(lines))
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		paths = append(paths, NormalizePath(filepath.ToSlash(line)))
-	}
-	return paths, nil
 }
 
 func isNotGitRepoErr(err error) bool {

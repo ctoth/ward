@@ -1112,12 +1112,12 @@ var signalRefRe = regexp.MustCompile(`(?:session\.signals\.contains\("([^"]+)"\)
 // - Nothing matches → allowed (nil)
 // Returns the result, the one-time signals that changed a rule's outcome, and any error.
 func Evaluate(guard *Guard, state *State, event ToolEvent) (*Result, map[string]bool, error) {
-	return EvaluateVerbose(guard, state, event, nil)
+	return EvaluateVerbose(guard, state, event, nil, nil)
 }
 
 // EvaluateVerbose is like Evaluate but writes debug info to verbose when non-nil.
 // Returns the result, the set of signal names referenced by matched rules, and any error.
-func EvaluateVerbose(guard *Guard, state *State, event ToolEvent, verbose io.Writer) (*Result, map[string]bool, error) {
+func EvaluateVerbose(guard *Guard, state *State, event ToolEvent, repoStatus *RepoStatus, verbose io.Writer) (*Result, map[string]bool, error) {
 	// Ward's runtime control plane must remain reachable from every phase.
 	// Otherwise a phase rule that denies its shell transport can trap the actor
 	// in that phase and also deny the signal/ownership commands needed to obey
@@ -1130,6 +1130,11 @@ func EvaluateVerbose(guard *Guard, state *State, event ToolEvent, verbose io.Wri
 		return nil, map[string]bool{}, nil
 	}
 
+	repoDir := EffectiveRepoDir(event)
+	if repoStatus == nil {
+		repoStatus, _ = ComputeRepoStatus(repoDir)
+	}
+
 	sessionMap := state.ToMap()
 
 	if verbose != nil {
@@ -1140,7 +1145,7 @@ func EvaluateVerbose(guard *Guard, state *State, event ToolEvent, verbose io.Wri
 	// Normalize input paths. Repo context follows the directory the event's
 	// git commands actually target (cd prefixes / git -C), not the shell cwd.
 	normalizedInput := NormalizeInput(event.Input)
-	enrichCommandRepoContext(normalizedInput, EffectiveRepoDir(event))
+	enrichCommandRepoContext(normalizedInput, repoStatus)
 
 	// Determine which facts are referenced by any rule
 	neededFacts := make(map[string]bool)
@@ -1176,7 +1181,7 @@ func EvaluateVerbose(guard *Guard, state *State, event ToolEvent, verbose io.Wri
 		"input":   normalizedInput,
 		"session": sessionMap,
 		"facts":   factsMap,
-		"repo":    repoActivation(EffectiveRepoDir(event), state, verbose),
+		"repo":    repoActivation(repoStatus, state, verbose),
 	}
 
 	// Collect all matching results: deny-is-veto, context accumulates
@@ -1313,18 +1318,7 @@ func EvaluateVerbose(guard *Guard, state *State, event ToolEvent, verbose io.Wri
 	return nil, matchedSignals, nil // no rule matched — allow
 }
 
-func repoActivation(cwd string, state *State, verbose io.Writer) map[string]any {
-	status, err := ComputeRepoStatus(cwd)
-	if err != nil {
-		if verbose != nil {
-			fmt.Fprintf(verbose, "ward:   repo status: error: %v\n", err)
-		}
-		return map[string]any{
-			"in_git": false,
-			"clean":  true,
-		}
-	}
-
+func repoActivation(status *RepoStatus, state *State, verbose io.Writer) map[string]any {
 	if status == nil {
 		return map[string]any{
 			"in_git": false,
@@ -1366,9 +1360,8 @@ func repoActivation(cwd string, state *State, verbose io.Writer) map[string]any 
 	}
 }
 
-func enrichCommandRepoContext(input map[string]any, cwd string) {
-	status, err := ComputeRepoStatus(cwd)
-	if err != nil || status == nil || !status.InGit {
+func enrichCommandRepoContext(input map[string]any, status *RepoStatus) {
+	if status == nil || !status.InGit {
 		return
 	}
 
