@@ -2123,7 +2123,7 @@ func TestAbsoluteGitPathSelectsItsRepositoryWhenHookCWDisStale(t *testing.T) {
 	state.SyncRepo(statusA) // Codex hook reports the parent session cwd.
 
 	event := gitBashEvent(t, repoA, "git add -- "+NormalizePath(target))
-	if got := effectiveRepoDirWithStatus(event, resolveStatus); got != NormalizePath(repoB) {
+	if got := effectiveRepoDirWithStatus(event, state.RepoRoot, resolveStatus); got != NormalizePath(repoB) {
 		t.Fatalf("effective repo = %q, want absolute target repo %q", got, NormalizePath(repoB))
 	}
 	state.SyncRepo(statusB)

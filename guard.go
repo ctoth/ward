@@ -1136,7 +1136,7 @@ func EvaluateVerbose(guard *Guard, state *State, event ToolEvent, repoStatus *Re
 		repoStatus = &RepoStatus{Clean: true}
 		for _, rule := range guard.Rules {
 			if strings.Contains(rule.When, "repo.") {
-				repoStatus, _ = ComputeRepoStatus(EffectiveRepoDir(event))
+				repoStatus, _ = ComputeRepoStatus(EffectiveRepoDir(event, state.RepoRoot))
 				break
 			}
 		}

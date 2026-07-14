@@ -464,12 +464,6 @@ func cmdEval() {
 		os.Exit(1)
 	}
 
-	guard, err := loadGuard(event.CWD)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "ward: load config: %v\n", err)
-		os.Exit(1)
-	}
-
 	// Register CC PID → session_id so `ward allow` can resolve sessions
 	// from the process tree when run via `!` inside Claude Code.
 	if event.SessionID != "" {
@@ -487,8 +481,6 @@ func cmdEval() {
 	if key.ActorKey != MainActorKey {
 		initialPhase = UninitializedPhase
 	}
-	repoStatus, _ := ComputeRepoStatus(EffectiveRepoDir(event))
-
 	var verboseWriter io.Writer
 	if verbose {
 		verboseWriter = os.Stderr
@@ -499,6 +491,12 @@ func cmdEval() {
 		if event.AgentType != "" {
 			state.AgentType = event.AgentType
 		}
+		effectiveRepoDir := EffectiveRepoDir(event, state.RepoRoot)
+		guard, err := loadGuard(effectiveRepoDir)
+		if err != nil {
+			return fmt.Errorf("load config: %w", err)
+		}
+		repoStatus, _ := ComputeRepoStatus(effectiveRepoDir)
 		state.SyncRepo(repoStatus)
 		state.Update(event.Tool, event.Input)
 		var matchedSignals map[string]bool

@@ -283,8 +283,29 @@ func TestDetectCodexLocalShellUsesWorkdirAsCWD(t *testing.T) {
 	if event.CWD != "C:/repo-b" {
 		t.Fatalf("CWD = %q, want local shell workdir", event.CWD)
 	}
-	if got := EffectiveRepoDir(event); got != "C:/repo-b" {
+	if got := EffectiveRepoDir(event, "C:/repo-c"); got != "C:/repo-b" {
 		t.Fatalf("effective repo dir = %q, want local shell workdir", got)
+	}
+}
+
+func TestEffectiveRepoDirUsesActiveRepoWhenCodexOmitsWorkdir(t *testing.T) {
+	data := []byte(`{
+		"session_id":"codex-multi-repo-session",
+		"cwd":"C:/repo-a",
+		"hook_event_name":"PreToolUse",
+		"tool_name":"Bash",
+		"tool_input":{"command":"git add -- spec/tasks.md"}
+	}`)
+
+	event, _, err := DetectAndParse(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolveStatus := func(path string) (*RepoStatus, error) {
+		return &RepoStatus{InGit: true, Root: NormalizePath(path)}, nil
+	}
+	if got := effectiveRepoDirWithStatus(event, "C:/repo-b", resolveStatus); got != "C:/repo-b" {
+		t.Fatalf("effective repo dir = %q, want active repo fallback", got)
 	}
 }
 
@@ -376,7 +397,7 @@ func TestDetectCodexApplyPatchExtractsTouchedPathsFromHookCommand(t *testing.T) 
 	if event.Input["file_path"] != "C:/repo-b/owned.txt" {
 		t.Fatalf("file_path = %#v, want command-shaped patched path", event.Input["file_path"])
 	}
-	if got := EffectiveRepoDir(event); got != "C:/repo-b" {
+	if got := EffectiveRepoDir(event, "C:/repo-c"); got != "C:/repo-b" {
 		t.Fatalf("effective repo dir = %q, want patched file repo", got)
 	}
 }

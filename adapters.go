@@ -125,17 +125,20 @@ func enrichBashCommands(event *ToolEvent) {
 // not the session cwd: a Write into a sibling repo must record its touch in
 // THAT repo's scope, or a later `cd sibling && git add <file>` is denied as
 // unowned even though the agent authored the file.
-func EffectiveRepoDir(event ToolEvent) string {
-	return effectiveRepoDirWithStatus(event, ComputeRepoStatus)
+func EffectiveRepoDir(event ToolEvent, activeRepo string) string {
+	return effectiveRepoDirWithStatus(event, activeRepo, ComputeRepoStatus)
 }
 
-func effectiveRepoDirWithStatus(event ToolEvent, repoStatus func(string) (*RepoStatus, error)) string {
+func effectiveRepoDirWithStatus(event ToolEvent, activeRepo string, repoStatus func(string) (*RepoStatus, error)) string {
 	if filePath := strField(event.Input, "file_path"); filePath != "" {
 		return resolveShellPath(event.CWD, parentDir(filePath))
 	}
 	for _, cmd := range event.Parsed {
 		if cmd.Name != "git" {
 			continue
+		}
+		if strField(event.Input, "workdir") != "" {
+			return event.CWD
 		}
 		if cmd.Dir != "" {
 			return resolveShellPath(event.CWD, cmd.Dir)
@@ -150,6 +153,9 @@ func effectiveRepoDirWithStatus(event ToolEvent, repoStatus func(string) (*RepoS
 					return status.Root
 				}
 			}
+		}
+		if activeRepo != "" {
+			return NormalizePath(activeRepo)
 		}
 		return event.CWD
 	}
