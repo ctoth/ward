@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -46,6 +47,12 @@ func main() {
 			os.Exit(0)
 		}
 		cmdSet()
+	case "status":
+		if hasHelpFlag(os.Args[2:]) {
+			fmt.Fprintln(os.Stderr, helpStatus)
+			os.Exit(0)
+		}
+		cmdStatus()
 	case "enter":
 		if hasHelpFlag(os.Args[2:]) {
 			fmt.Fprintln(os.Stderr, helpEnter)
@@ -191,6 +198,7 @@ Usage:
 Commands:
   eval          Evaluate a tool call event from stdin
   set           Set one actor's phase
+  status        Inspect one actor's current state without changing it
   enter         Enter a scoped phase and remember the current phase
   leave         Leave a scoped phase and restore the previous phase
   allow         Add a one-time override signal
@@ -263,6 +271,17 @@ events that omit actor identity continue to use that actor. An explicit
 
 Example:
   ward set implementing --session abc`
+
+const helpStatus = `ward status - inspect one actor's current state
+
+Reads the selected actor record without creating, binding, or updating it.
+
+Usage:
+  ward status [--session ID] [--agent ID] [--json]
+
+The session and actor can also be provided via WARD_SESSION and WARD_ACTOR_ID.
+If no actor is explicit, Ward reads the session's current actor binding, then
+falls back to the main actor. Missing actor state is an error.`
 
 const helpEnter = `ward enter - enter a scoped phase
 
@@ -575,6 +594,41 @@ func cmdAllow() {
 				"hook evaluation will NOT see this signal. Pass --session <id> or set %s.\n",
 			envSession)
 	}
+}
+
+func cmdStatus() {
+	cwd, _ := os.Getwd()
+	key, state, err := readStatusState(os.Args, resolveSessionFromProcessTree(), cwd)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ward: status: %v\n", err)
+		os.Exit(1)
+	}
+
+	if hasExactFlag(os.Args, "--json") {
+		encoder := json.NewEncoder(os.Stdout)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(state); err != nil {
+			fmt.Fprintf(os.Stderr, "ward: status: encode JSON: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	signalNames := make([]string, 0, len(state.Signals))
+	for name := range state.Signals {
+		signalNames = append(signalNames, name)
+	}
+	sort.Strings(signalNames)
+	fmt.Printf("session: %s\n", key.SessionKey)
+	fmt.Printf("actor: %s\n", key.ActorKey)
+	fmt.Printf("phase: %s\n", state.Phase)
+	fmt.Printf("phase stack: %s\n", strings.Join(state.PhaseStack, ", "))
+	fmt.Printf("signals: %s\n", strings.Join(signalNames, ", "))
+	fmt.Printf("repo: %s\n", state.RepoRoot)
+	fmt.Printf("baseline dirty: %s\n", strings.Join(state.BaselineDirtyPaths, ", "))
+	fmt.Printf("session owned: %s\n", strings.Join(pathDifference(state.TouchedFiles, state.BaselineDirtyPaths), ", "))
+	fmt.Printf("adopted: %s\n", strings.Join(state.AdoptedPaths, ", "))
+	fmt.Printf("discardable: %s\n", strings.Join(state.DiscardablePaths, ", "))
 }
 
 func cmdGrantPaths(kind string) {
@@ -984,6 +1038,34 @@ func commandStateKey() (StateKey, error) {
 		return StateKey{}, fmt.Errorf("bind active actor: %w", err)
 	}
 	return key, nil
+}
+
+func readStatusState(args []string, processSession, cwd string) (StateKey, *State, error) {
+	sessionKey := resolveCommandSession(args, processSession, cwd)
+	actorKey := flagValue(args, "--agent")
+	if actorKey == "" {
+		actorKey = os.Getenv(envActorID)
+	}
+	if actorKey == "" {
+		data, err := os.ReadFile(activeActorBindingPath(sessionKey))
+		if err == nil {
+			actorKey = strings.TrimSpace(string(data))
+		} else if !os.IsNotExist(err) {
+			return StateKey{}, nil, fmt.Errorf("read active actor binding: %w", err)
+		}
+	}
+	if actorKey == "" {
+		actorKey = MainActorKey
+	}
+	key := StateKey{SessionKey: sessionKey, ActorKey: actorKey}
+	if err := validateStateKey(key); err != nil {
+		return StateKey{}, nil, err
+	}
+	state, err := readActorState(key)
+	if err != nil {
+		return StateKey{}, nil, err
+	}
+	return key, state, nil
 }
 
 func stateKeyFromHook(event ToolEvent) (StateKey, error) {

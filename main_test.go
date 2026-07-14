@@ -1,11 +1,67 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
+	"os/exec"
 	"reflect"
 	"testing"
 	"time"
 )
+
+func TestStatusCLIReadsActorStateWithoutMutation(t *testing.T) {
+	session := "status-read-only-" + t.Name()
+	key := StateKey{SessionKey: session, ActorKey: "worker-a"}
+	t.Cleanup(func() { _ = PurgeSessionFamily(session) })
+
+	state := NewState("implementing")
+	state.EnterPhase("testing")
+	state.Signals["approved"] = Signal{OneTimeUse: true}
+	state.RepoRoot = "C:/repo"
+	state.TouchedFiles = []string{"generated.txt"}
+	if err := SaveState(key, state); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(statePath(key))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	testBinary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(testBinary, "status", "--session", session, "--agent", key.ActorKey, "--json")
+	cmd.Env = append(os.Environ(), testCLIEnv+"=1", envActorID+"=")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("ward status: %v\n%s", err, output)
+	}
+	var got State
+	if err := json.Unmarshal(output, &got); err != nil {
+		t.Fatalf("decode status output %q: %v", output, err)
+	}
+	if got.SessionKey != session || got.ActorKey != key.ActorKey || got.Phase != "testing" {
+		t.Fatalf("status = %#v, want selected actor in testing phase", got)
+	}
+	if len(got.PhaseStack) != 1 || got.PhaseStack[0] != "implementing" {
+		t.Fatalf("phase stack = %#v, want implementing", got.PhaseStack)
+	}
+	if _, ok := got.Signals["approved"]; !ok {
+		t.Fatalf("signals = %#v, want approved", got.Signals)
+	}
+
+	after, err := os.ReadFile(statePath(key))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(after, before) {
+		t.Fatal("ward status mutated actor state")
+	}
+	if _, err := os.Stat(activeActorBindingPath(session)); !os.IsNotExist(err) {
+		t.Fatalf("ward status created an active actor binding: %v", err)
+	}
+}
 
 func TestHookAndCommandResolveIdenticalStateKeys(t *testing.T) {
 	t.Setenv(envActorID, "environment-worker")
