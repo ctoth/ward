@@ -4,6 +4,8 @@ Session-aware guard for AI coding agents. Ward evaluates CEL rules against tool 
 
 Ward parses shell commands into an AST using [mvdan.cc/sh](https://pkg.go.dev/mvdan.cc/sh/v3), so rules match against actual commands — not raw text. This means `git commit -m "python -c blah"` won't trigger a no-python-c rule, because the only actual command is `git`. Pipes, `&&` chains, and semicolons are all decomposed into individual commands.
 
+Ward also correlates pre- and post-tool events. Known edit tools identify their target paths directly; for shell tools, Ward compares the active Git repository before and after the call and attributes newly dirty paths to that actor. This covers generated files and partial changes left by failed commands without pretending shell syntax can predict every filesystem effect.
+
 ## Install
 
 ```
@@ -17,7 +19,8 @@ ward install          # Claude Code (default)
 ward install codex    # Codex CLI
 ```
 
-Both forms preserve unrelated hooks and are safe to run repeatedly. Use the
+Both forms install pre- and post-tool hooks, preserve unrelated hooks, and are
+safe to run repeatedly. Claude Code also gets a post-tool-failure hook. Use the
 same explicit host with `ward uninstall codex` to remove only Ward's Codex
 hooks.
 
@@ -155,7 +158,7 @@ All paths are normalized to forward slashes internally, including on Windows.
 ### Runtime control plane
 
 Phase rules cannot deny a single, exact invocation of Ward's runtime control
-plane: `set`, `enter`, `leave`, `allow`, `adopt`, `discard`, `revoke`,
+plane: `set`, `status`, `enter`, `leave`, `allow`, `adopt`, `discard`, `revoke`,
 `validate`, `start-actor`, `end-actor`, or `end-session` (and `ward --help`).
 This prevents a restricted phase from blocking the command needed to leave that
 phase or satisfy its own signal and ownership rules.
@@ -180,6 +183,15 @@ Sets the session phase.
 ward set implementing --session abc
 ```
 
+### `ward status`
+
+Reads one actor's persisted runtime state without creating, binding, or
+updating it. Use `--json` when another tool or agent will consume the result.
+
+```bash
+ward status --session abc --agent main --json
+```
+
 ### `ward validate`
 
 Scans all rule files, compiles CEL, reports errors.
@@ -193,8 +205,8 @@ ward validate
 Ward auto-detects the hook protocol from the JSON format:
 
 - **Claude Code and Codex CLI**: flat Claude-compatible payloads where
-  `hook_event_name` is `PreToolUse`/`PostToolUse`; Codex also supplies
-  `turn_id`
+  `hook_event_name` is `PreToolUse`/`PostToolUse` (and Claude Code can send
+  `PostToolUseFailure`); Codex also supplies `turn_id`
 - **Gemini CLI**: `hook_event_name` is `BeforeTool`/`AfterTool`
 
 Each protocol gets responses in its native format.
@@ -209,6 +221,7 @@ once with `--agent` (or `WARD_ACTOR_ID`):
 
 ```bash
 ward set integrator --session "$CODEX_THREAD_ID" --agent promotion-worker
+# Only after the user or controlling workflow authorizes this exact exception:
 ward allow dirty-tree-switch --session "$CODEX_THREAD_ID"
 ```
 

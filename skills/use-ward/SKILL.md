@@ -13,9 +13,10 @@ Use Ward as the repository's policy runtime, not as an obstacle to route around.
 2. Run `ward validate` before relying on a changed or unfamiliar configuration.
 3. Use `ward list-profiles` and `ward resolve-config --json` when the active profiles or effective rules affect the task.
 4. Run `ward <command> --help` before using a runtime command whose arguments are uncertain.
-5. Preserve the session and actor identity supplied by the host. Do not guess identifiers or apply one actor's state to another actor.
+5. Run `ward status --json` to inspect the selected actor's persisted phase, phase stack, signals, repo scope, and ownership grants without changing them.
+6. Preserve the session and actor identity supplied by the host. Do not guess identifiers or apply one actor's state to another actor.
 
-Ward currently has no read-only command that displays an actor's current phase, signals, adopted paths, and discardable paths together. Do not claim to have inspected that state when only the effective configuration was inspected. Do not scrape or edit Ward's state files as a substitute.
+Treat `ward status` as Ward's state fact for the selected session and actor. Treat `ward resolve-config --json` as the effective policy fact. Neither command proves user intent or grants authority.
 
 ## Respect ownership boundaries
 
@@ -24,6 +25,8 @@ Ward currently has no read-only command that displays an actor's current phase, 
 - Use `ward adopt <path>...` only when the exact pre-existing paths are authorized for commit scope. Adoption does not authorize discarding them.
 - Use `ward discard <path>...` only when discarding those exact paths is authorized. Discard authority does not adopt them for commit.
 - Never use adoption or discard merely to silence a denial. First establish that the requested task actually includes that state transition.
+- Ward recognizes known edit tools directly. For shell tools it parses commands for policy evaluation, then uses the correlated post-tool Git delta to attribute newly dirty paths, including partial effects of failed commands.
+- Do not infer that Ward observed changes outside the active Git repository or effects performed outside installed host hooks.
 
 ## Manage phases literally
 
@@ -70,10 +73,10 @@ Never evade a denial by changing tools, spelling the same effect differently, by
 
 Before claiming the Ward-governed work is complete:
 
-1. Inspect Git status and separate current-task paths from pre-existing or other-actor paths.
+1. Run `ward status --json`, inspect Git status, and separate current-task paths from pre-existing or other-actor paths.
 2. Run the named verification gates required by the task or policy.
 3. Run `ward validate` when Ward rules, facts, signals, or profiles changed.
 4. Report unresolved denials, missing authority, uncertain actor/session state, and any Ward state changes made during the task.
 5. Do not describe a passing narrow check, a successful control-plane command, or an absence of denial as proof of broader completion.
 
-Ward governs the tool-call events it receives. Do not represent it as an operating-system sandbox or assume it observes effects performed outside its installed host hooks.
+Ward governs the tool-call events it receives. With pre/post hooks it can correlate observable Git effects with a tool call; it is still not an operating-system sandbox and cannot guarantee observation outside its installed host hooks.
