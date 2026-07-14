@@ -125,6 +125,7 @@ func installWardHooks(path, host string) error {
 	if err != nil {
 		return fmt.Errorf("read settings: %w", err)
 	}
+	captainhook.Uninstall(settings, wardIdentity)
 	if err := captainhook.Install(settings, wardHookSpecs(host), wardIdentity); err != nil {
 		return err
 	}

@@ -150,6 +150,19 @@ func TestCodexInstallAndUninstallPreserveUnrelatedHooks(t *testing.T) {
 						map[string]interface{}{"type": "command", "command": "other-tool check"},
 					},
 				},
+				map[string]interface{}{
+					"matcher": "Bash|Edit|Write|WebFetch",
+					"hooks": []interface{}{
+						map[string]interface{}{"type": "command", "command": `"` + filepath.ToSlash(wardBinary) + `" eval`},
+					},
+				},
+			},
+			"SessionEnd": []interface{}{
+				map[string]interface{}{
+					"hooks": []interface{}{
+						map[string]interface{}{"type": "command", "command": `"` + filepath.ToSlash(wardBinary) + `" end-session`},
+					},
+				},
 			},
 		},
 	}
