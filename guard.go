@@ -274,6 +274,7 @@ func CompileRule(r *Rule) error {
 
 const maxHistory = 100
 const maxPendingTools = 100
+const pendingToolTTL = 24 * time.Hour
 
 const (
 	CurrentStateSchemaVersion = 1
@@ -389,6 +390,12 @@ func (s *State) UpdateEvent(event ToolEvent, status *RepoStatus) {
 		if s.PendingTools == nil {
 			s.PendingTools = make(map[string]ToolSnapshot)
 		}
+		now := time.Now()
+		for id, snapshot := range s.PendingTools {
+			if snapshot.CapturedAt.IsZero() || now.Sub(snapshot.CapturedAt) > pendingToolTTL {
+				delete(s.PendingTools, id)
+			}
+		}
 		if _, replacing := s.PendingTools[event.ToolUseID]; !replacing && len(s.PendingTools) >= maxPendingTools {
 			oldestID := ""
 			var oldestAt time.Time
@@ -403,7 +410,7 @@ func (s *State) UpdateEvent(event ToolEvent, status *RepoStatus) {
 		s.PendingTools[event.ToolUseID] = ToolSnapshot{
 			RepoRoot:   NormalizePath(status.Root),
 			DirtyPaths: append([]string(nil), status.DirtyPaths...),
-			CapturedAt: time.Now(),
+			CapturedAt: now,
 		}
 	}
 

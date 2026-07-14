@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func loadTestGuard(t *testing.T) *Guard {
@@ -2323,5 +2324,32 @@ func TestStateUpdateEventCapsPendingToolSnapshots(t *testing.T) {
 	}
 	if _, exists := state.PendingTools["tool-100"]; !exists {
 		t.Fatal("newest pending tool was not retained")
+	}
+}
+
+func TestStateUpdateEventPrunesStalePendingToolSnapshots(t *testing.T) {
+	repo := NormalizePath(t.TempDir())
+	status := &RepoStatus{InGit: true, Root: repo}
+	state := NewState("implementing")
+	state.SyncRepo(status)
+	state.PendingTools["legacy"] = ToolSnapshot{RepoRoot: repo}
+	state.PendingTools["expired"] = ToolSnapshot{RepoRoot: repo, CapturedAt: time.Now().Add(-25 * time.Hour)}
+	state.PendingTools["fresh"] = ToolSnapshot{RepoRoot: repo, CapturedAt: time.Now()}
+
+	state.UpdateEvent(ToolEvent{
+		Tool:      "Bash",
+		EventType: "pre_tool",
+		ToolUseID: "current",
+	}, status)
+
+	for _, staleID := range []string{"legacy", "expired"} {
+		if _, exists := state.PendingTools[staleID]; exists {
+			t.Fatalf("stale pending tool %q was not pruned", staleID)
+		}
+	}
+	for _, retainedID := range []string{"fresh", "current"} {
+		if _, exists := state.PendingTools[retainedID]; !exists {
+			t.Fatalf("pending tool %q was not retained", retainedID)
+		}
 	}
 }
