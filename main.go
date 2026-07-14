@@ -606,6 +606,10 @@ func cmdGrantPaths(kind string) {
 }
 
 func grantPaths(state *State, kind, cwd string, rawPaths []string) ([]string, error) {
+	return grantPathsWithStatus(state, kind, cwd, rawPaths, ComputeRepoStatus)
+}
+
+func grantPathsWithStatus(state *State, kind, cwd string, rawPaths []string, repoStatus func(string) (*RepoStatus, error)) ([]string, error) {
 	normalized := make([]string, 0, len(rawPaths))
 	for _, rawPath := range rawPaths {
 		if rawPath == "" {
@@ -620,19 +624,19 @@ func grantPaths(state *State, kind, cwd string, rawPaths []string) ([]string, er
 		if err != nil {
 			return nil, fmt.Errorf("%s path %q: %w", kind, rawPath, err)
 		}
-		repoStatus, err := ComputeRepoStatus(filepath.Dir(absPath))
+		status, err := repoStatus(filepath.Dir(absPath))
 		if err != nil {
 			return nil, fmt.Errorf("resolve repo for %s path %q: %w", kind, rawPath, err)
 		}
-		if repoStatus == nil || !repoStatus.InGit {
+		if status == nil || !status.InGit {
 			return nil, fmt.Errorf("%s path %q is not inside a git repo", kind, rawPath)
 		}
-		path, err := normalizeGrantPath(repoStatus.Root, cwd, rawPath)
+		path, err := normalizeGrantPath(status.Root, cwd, rawPath)
 		if err != nil {
 			return nil, fmt.Errorf("%s path %q: %w", kind, rawPath, err)
 		}
 
-		state.SyncRepo(repoStatus)
+		state.SyncRepo(status)
 		switch kind {
 		case "adopt":
 			state.AdoptedPaths = uniquePaths(append(state.AdoptedPaths, path))

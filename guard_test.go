@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -2088,34 +2089,45 @@ func TestAbsoluteGitPathSelectsItsRepositoryWhenHookCWDisStale(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	repoA := initTestRepo(t)
-	repoB := initTestRepo(t)
+	repoA := t.TempDir()
+	repoB := t.TempDir()
 	target := filepath.Join(repoB, "owned.txt")
 	if err := os.WriteFile(target, []byte("owned\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	state := NewState("implementing")
-	statusA, err := ComputeRepoStatus(repoA)
-	if err != nil {
-		t.Fatal(err)
+	statusA := &RepoStatus{InGit: true, Root: NormalizePath(repoA), Branch: "main", Clean: true}
+	statusB := &RepoStatus{
+		InGit:          true,
+		Root:           NormalizePath(repoB),
+		Branch:         "main",
+		HasUntracked:   true,
+		DirtyPaths:     []string{"owned.txt"},
+		UntrackedPaths: []string{"owned.txt"},
+	}
+	resolveStatus := func(path string) (*RepoStatus, error) {
+		path = NormalizePath(path)
+		if path == statusA.Root || strings.HasPrefix(path, statusA.Root+"/") {
+			return statusA, nil
+		}
+		if path == statusB.Root || strings.HasPrefix(path, statusB.Root+"/") {
+			return statusB, nil
+		}
+		return &RepoStatus{Clean: true}, nil
 	}
 	state.SyncRepo(statusA)
-	if _, err := grantPaths(state, "adopt", repoA, []string{target}); err != nil {
+	if _, err := grantPathsWithStatus(state, "adopt", repoA, []string{target}, resolveStatus); err != nil {
 		t.Fatal(err)
 	}
 	state.SyncRepo(statusA) // Codex hook reports the parent session cwd.
 
 	event := gitBashEvent(t, repoA, "git add -- "+NormalizePath(target))
-	if got := EffectiveRepoDir(event); got != NormalizePath(repoB) {
+	if got := effectiveRepoDirWithStatus(event, resolveStatus); got != NormalizePath(repoB) {
 		t.Fatalf("effective repo = %q, want absolute target repo %q", got, NormalizePath(repoB))
 	}
-	statusB, err := ComputeRepoStatus(EffectiveRepoDir(event))
-	if err != nil {
-		t.Fatal(err)
-	}
 	state.SyncRepo(statusB)
-	result, _, err := Evaluate(guard, state, event)
+	result, _, err := EvaluateVerbose(guard, state, event, statusB, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -126,6 +126,10 @@ func enrichBashCommands(event *ToolEvent) {
 // THAT repo's scope, or a later `cd sibling && git add <file>` is denied as
 // unowned even though the agent authored the file.
 func EffectiveRepoDir(event ToolEvent) string {
+	return effectiveRepoDirWithStatus(event, ComputeRepoStatus)
+}
+
+func effectiveRepoDirWithStatus(event ToolEvent, repoStatus func(string) (*RepoStatus, error)) string {
 	if filePath := strField(event.Input, "file_path"); filePath != "" {
 		return resolveShellPath(event.CWD, parentDir(filePath))
 	}
@@ -141,7 +145,7 @@ func EffectiveRepoDir(event ToolEvent) string {
 				continue
 			}
 			for _, candidate := range []string{path, parentDir(path)} {
-				status, err := ComputeRepoStatus(candidate)
+				status, err := repoStatus(candidate)
 				if err == nil && status != nil && status.InGit {
 					return status.Root
 				}

@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -144,7 +145,7 @@ func TestStateToMapIncludesGrantPaths(t *testing.T) {
 }
 
 func TestNormalizeGrantPath(t *testing.T) {
-	repo := initTestRepo(t)
+	repo := t.TempDir()
 	path, err := normalizeGrantPath(NormalizePath(repo), repo, filepath.Join(repo, "src", "app.py"))
 	if err != nil {
 		t.Fatal(err)
@@ -155,8 +156,8 @@ func TestNormalizeGrantPath(t *testing.T) {
 }
 
 func TestGrantPathsAdoptsAbsolutePathInSiblingRepoScope(t *testing.T) {
-	repoA := initTestRepo(t)
-	repoB := initTestRepo(t)
+	repoA := t.TempDir()
+	repoB := t.TempDir()
 	target := filepath.Join(repoB, "src", "app.py")
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		t.Fatal(err)
@@ -166,13 +167,21 @@ func TestGrantPathsAdoptsAbsolutePathInSiblingRepoScope(t *testing.T) {
 	}
 
 	state := NewState("implementing")
-	statusA, err := ComputeRepoStatus(repoA)
-	if err != nil {
-		t.Fatal(err)
+	statusA := &RepoStatus{InGit: true, Root: NormalizePath(repoA), Branch: "main", Clean: true}
+	statusB := &RepoStatus{InGit: true, Root: NormalizePath(repoB), Branch: "main", Clean: true}
+	resolveStatus := func(path string) (*RepoStatus, error) {
+		path = NormalizePath(path)
+		if path == statusA.Root || strings.HasPrefix(path, statusA.Root+"/") {
+			return statusA, nil
+		}
+		if path == statusB.Root || strings.HasPrefix(path, statusB.Root+"/") {
+			return statusB, nil
+		}
+		return &RepoStatus{Clean: true}, nil
 	}
 	state.SyncRepo(statusA)
 
-	normalized, err := grantPaths(state, "adopt", repoA, []string{target})
+	normalized, err := grantPathsWithStatus(state, "adopt", repoA, []string{target}, resolveStatus)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,10 +199,6 @@ func TestGrantPathsAdoptsAbsolutePathInSiblingRepoScope(t *testing.T) {
 	if len(state.AdoptedPaths) != 0 {
 		t.Fatalf("caller repo inherited sibling adoption: %#v", state.AdoptedPaths)
 	}
-	statusB, err := ComputeRepoStatus(repoB)
-	if err != nil {
-		t.Fatal(err)
-	}
 	state.SyncRepo(statusB)
 	if len(state.AdoptedPaths) != 1 || state.AdoptedPaths[0] != "src/app.py" {
 		t.Fatalf("sibling adoption was not restored: %#v", state.AdoptedPaths)
@@ -208,7 +213,7 @@ func TestGrantPathsAdoptsAbsolutePathInSiblingRepoScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	event := gitBashEvent(t, repoB, "git add -- src/app.py")
-	result, _, err := Evaluate(guard, state, event)
+	result, _, err := EvaluateVerbose(guard, state, event, statusB, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
