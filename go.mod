@@ -3,9 +3,10 @@ module github.com/ctoth/ward
 go 1.25.0
 
 require (
-	github.com/ctoth/captain-hook v0.0.0
+	github.com/ctoth/captain-hook v0.1.0
 	github.com/google/cel-go v0.27.0
 	gopkg.in/yaml.v3 v3.0.1
+	mvdan.cc/sh/v3 v3.13.0
 )
 
 replace github.com/ctoth/captain-hook => ../captain-hook
@@ -17,5 +18,4 @@ require (
 	google.golang.org/genproto/googleapis/api v0.0.0-20240826202546-f6391c0de4c7 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240826202546-f6391c0de4c7 // indirect
 	google.golang.org/protobuf v1.36.10 // indirect
-	mvdan.cc/sh/v3 v3.13.0 // indirect
 )

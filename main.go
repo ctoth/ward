@@ -320,15 +320,17 @@ Usage:
 
 const helpInstall = `ward install - register ward hooks in host settings
 
-Adds ward's PreToolUse (eval), SubagentStart (start-actor), SubagentStop
-(end-actor), and SessionEnd (end-session) hooks to the selected host file.
+Adds ward's all-tools PreToolUse (eval), SubagentStart (start-actor), and
+SubagentStop (end-actor) hooks to the selected host file. Claude Code also gets
+SessionEnd (end-session); Codex does not expose a terminal session hook.
 Idempotent — safe to run multiple times.
 Preserves all other hooks (claudio, etc).
 
 Usage:
   ward install [claude|codex]
 
-The default host is claude. Codex hooks are installed to ~/.codex/hooks.json.`
+The default host is claude. Codex hooks are installed to ~/.codex/hooks.json
+and must be approved during Codex's next interactive startup before they run.`
 
 const helpInstallDefaults = `ward install-defaults - install built-in profile bundles
 

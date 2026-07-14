@@ -5,34 +5,50 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 
 	captainhook "github.com/ctoth/captain-hook"
 )
 
 var wardIdentity = captainhook.CommandIdentity("ward", "ward.exe", filepath.Base(wardExePath()))
 
-func wardHookSpecs() []captainhook.HookSpec {
+func wardHookSpecs(host string) []captainhook.HookSpec {
 	exe := wardExePath()
-	return []captainhook.HookSpec{
+	specs := []captainhook.HookSpec{
 		{
 			Event:   "PreToolUse",
-			Matcher: "Bash|Edit|Write|WebFetch",
-			Command: exe + " eval",
+			Matcher: "*",
+			Command: exe,
+			Args:    []string{"eval"},
 			Timeout: 5,
 		},
 		{
 			Event:   "SubagentStart",
-			Command: exe + " start-actor",
+			Command: exe,
+			Args:    []string{"start-actor"},
 		},
 		{
 			Event:   "SubagentStop",
-			Command: exe + " end-actor",
-		},
-		{
-			Event:   "SessionEnd",
-			Command: exe + " end-session",
+			Command: exe,
+			Args:    []string{"end-actor"},
 		},
 	}
+	if host == "claude" {
+		specs = append(specs, captainhook.HookSpec{
+			Event:   "SessionEnd",
+			Command: exe,
+			Args:    []string{"end-session"},
+		})
+	}
+	if host == "codex" {
+		for i := range specs {
+			command := strconv.Quote(exe) + " " + specs[i].Args[0]
+			specs[i].Command = command
+			specs[i].CommandWindows = command
+			specs[i].Args = nil
+		}
+	}
+	return specs
 }
 
 func wardExePath() string {
@@ -52,43 +68,48 @@ func wardExePath() string {
 }
 
 func cmdInstall() {
-	path, err := wardSettingsPath(os.Args[2:])
+	path, host, err := wardSettingsPath(os.Args[2:])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ward: find settings: %v\n", err)
 		os.Exit(1)
 	}
 
-	if err := installWardHooks(path); err != nil {
+	if err := installWardHooks(path, host); err != nil {
 		fmt.Fprintf(os.Stderr, "ward: install hooks: %v\n", err)
 		os.Exit(1)
 	}
 
 	fmt.Fprintf(os.Stderr, "ward: installed hooks to %s\n", path)
-	for _, spec := range wardHookSpecs() {
+	for _, spec := range wardHookSpecs(host) {
 		fmt.Fprintf(os.Stderr, "  %s: %s\n", spec.Event, spec.Command)
+	}
+	if host == "codex" {
+		fmt.Fprintln(os.Stderr, "ward: approve the new hooks during Codex's next interactive startup")
+		fmt.Fprintln(os.Stderr, "ward: non-interactive Codex runs require previously trusted hooks or --dangerously-bypass-hook-trust")
 	}
 }
 
-func wardSettingsPath(args []string) (string, error) {
+func wardSettingsPath(args []string) (string, string, error) {
 	if len(args) == 0 || len(args) == 1 && args[0] == "claude" {
-		return captainhook.FindSettingsPath()
+		path, err := captainhook.FindSettingsPath()
+		return path, "claude", err
 	}
 	if len(args) == 1 && args[0] == "codex" {
 		home, err := os.UserHomeDir()
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
-		return filepath.Join(home, ".codex", "hooks.json"), nil
+		return filepath.Join(home, ".codex", "hooks.json"), "codex", nil
 	}
-	return "", fmt.Errorf("usage: ward %s [claude|codex]", os.Args[1])
+	return "", "", fmt.Errorf("usage: ward %s [claude|codex]", os.Args[1])
 }
 
-func installWardHooks(path string) error {
+func installWardHooks(path, host string) error {
 	settings, err := captainhook.ReadSettings(path)
 	if err != nil {
 		return fmt.Errorf("read settings: %w", err)
 	}
-	if err := captainhook.Install(settings, wardHookSpecs(), wardIdentity); err != nil {
+	if err := captainhook.Install(settings, wardHookSpecs(host), wardIdentity); err != nil {
 		return err
 	}
 	if err := captainhook.WriteSettings(path, settings); err != nil {
@@ -98,7 +119,7 @@ func installWardHooks(path string) error {
 }
 
 func cmdUninstall() {
-	path, err := wardSettingsPath(os.Args[2:])
+	path, _, err := wardSettingsPath(os.Args[2:])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ward: find settings: %v\n", err)
 		os.Exit(1)

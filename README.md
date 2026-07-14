@@ -21,6 +21,16 @@ Both forms preserve unrelated hooks and are safe to run repeatedly. Use the
 same explicit host with `ward uninstall codex` to remove only Ward's Codex
 hooks.
 
+Codex treats newly installed or changed user hooks as untrusted. After
+`ward install codex`, approve the hooks during the next interactive Codex
+startup. Non-interactive Codex runs execute Ward only after that trust has been
+persisted, or when Codex is explicitly started with
+`--dangerously-bypass-hook-trust`.
+
+Claude Code exposes `SessionEnd`, so Ward automatically retires that session's
+state. Codex currently exposes `Stop` at the end of every turn but no terminal
+session hook; Ward deliberately does not map per-turn `Stop` to session cleanup.
+
 ## Facts
 
 Facts are shell commands evaluated on demand when referenced by rules. Each fact is one YAML file:

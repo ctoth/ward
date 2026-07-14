@@ -21,13 +21,13 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func TestWardHookSpecsIncludeActorAndFamilyLifecycleCleanup(t *testing.T) {
-	specs := wardHookSpecs()
+func TestClaudeHookSpecsUseExecFormAndIncludeSessionCleanup(t *testing.T) {
+	specs := wardHookSpecs("claude")
 	want := map[string]string{
-		"PreToolUse":    " eval",
-		"SubagentStart": " start-actor",
-		"SubagentStop":  " end-actor",
-		"SessionEnd":    " end-session",
+		"PreToolUse":    "eval",
+		"SubagentStart": "start-actor",
+		"SubagentStop":  "end-actor",
+		"SessionEnd":    "end-session",
 	}
 	seen := make(map[string]int)
 	for _, spec := range specs {
@@ -36,8 +36,14 @@ func TestWardHookSpecsIncludeActorAndFamilyLifecycleCleanup(t *testing.T) {
 			continue
 		}
 		seen[spec.Event]++
-		if !strings.HasSuffix(spec.Command, suffix) {
-			t.Errorf("%s command = %q, want suffix %q", spec.Event, spec.Command, suffix)
+		if len(spec.Args) != 1 || spec.Args[0] != suffix {
+			t.Errorf("%s args = %#v, want [%s]", spec.Event, spec.Args, suffix)
+		}
+		if strings.Contains(spec.Command, suffix) {
+			t.Errorf("%s command %q contains shell-form argument %q", spec.Event, spec.Command, suffix)
+		}
+		if spec.Event == "PreToolUse" && spec.Matcher != "*" {
+			t.Errorf("PreToolUse matcher = %q, want *", spec.Matcher)
 		}
 	}
 	for event := range want {
@@ -74,10 +80,10 @@ func TestWardHookInstallIsIdempotentAndPreservesUnrelatedHooks(t *testing.T) {
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := installWardHooks(path); err != nil {
+	if err := installWardHooks(path, "claude"); err != nil {
 		t.Fatal(err)
 	}
-	if err := installWardHooks(path); err != nil {
+	if err := installWardHooks(path, "claude"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -95,6 +101,15 @@ func TestWardHookInstallIsIdempotentAndPreservesUnrelatedHooks(t *testing.T) {
 	if unrelatedEntry["command"] != "other-tool check" {
 		t.Fatalf("unrelated hook changed: %#v", unrelatedEntry)
 	}
+	wardGroup := preToolGroups[1].(map[string]interface{})
+	if wardGroup["matcher"] != "*" {
+		t.Fatalf("Ward matcher = %#v, want *", wardGroup["matcher"])
+	}
+	wardEntry := wardGroup["hooks"].([]interface{})[0].(map[string]interface{})
+	args := wardEntry["args"].([]interface{})
+	if len(args) != 1 || args[0] != "eval" {
+		t.Fatalf("Ward args = %#v, want [eval]", args)
+	}
 	for _, event := range []string{"SubagentStart", "SubagentStop", "SessionEnd"} {
 		groups, ok := hooks[event].([]interface{})
 		if !ok || len(groups) != 1 {
@@ -105,7 +120,10 @@ func TestWardHookInstallIsIdempotentAndPreservesUnrelatedHooks(t *testing.T) {
 
 func TestCodexInstallAndUninstallPreserveUnrelatedHooks(t *testing.T) {
 	home := t.TempDir()
-	binDir := t.TempDir()
+	binDir := filepath.Join(t.TempDir(), "bin with spaces")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	wardBinary := filepath.Join(binDir, "ward.exe")
 
 	testBinary, err := os.Executable()
@@ -166,7 +184,7 @@ func TestCodexInstallAndUninstallPreserveUnrelatedHooks(t *testing.T) {
 		t.Fatal(err)
 	}
 	hooks := (*installed)["hooks"].(map[string]interface{})
-	for _, event := range []string{"PreToolUse", "SubagentStart", "SubagentStop", "SessionEnd"} {
+	for _, event := range []string{"PreToolUse", "SubagentStart", "SubagentStop"} {
 		groups, ok := hooks[event].([]interface{})
 		if !ok {
 			t.Fatalf("%s groups = %#v", event, hooks[event])
@@ -178,6 +196,25 @@ func TestCodexInstallAndUninstallPreserveUnrelatedHooks(t *testing.T) {
 		if len(groups) != want {
 			t.Fatalf("%s groups = %d, want %d: %#v", event, len(groups), want, groups)
 		}
+	}
+	if _, exists := hooks["SessionEnd"]; exists {
+		t.Fatalf("Codex install wrote unsupported SessionEnd hook: %#v", hooks["SessionEnd"])
+	}
+	preToolGroups := hooks["PreToolUse"].([]interface{})
+	wardGroup := preToolGroups[1].(map[string]interface{})
+	if wardGroup["matcher"] != "*" {
+		t.Fatalf("Ward matcher = %#v, want *", wardGroup["matcher"])
+	}
+	wardEntry := wardGroup["hooks"].([]interface{})[0].(map[string]interface{})
+	if _, exists := wardEntry["args"]; exists {
+		t.Fatalf("Codex hook unexpectedly uses unsupported args: %#v", wardEntry)
+	}
+	command := wardEntry["command"].(string)
+	if !strings.Contains(command, `"`) || !strings.HasSuffix(command, " eval") {
+		t.Fatalf("Codex command = %q, want quoted executable plus eval", command)
+	}
+	if wardEntry["commandWindows"] != command {
+		t.Fatalf("commandWindows = %#v, want %q", wardEntry["commandWindows"], command)
 	}
 	if _, err := os.Stat(filepath.Join(home, ".claude", "settings.json")); !os.IsNotExist(err) {
 		t.Fatalf("Codex install unexpectedly wrote Claude settings: %v", err)
