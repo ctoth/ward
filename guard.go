@@ -1494,6 +1494,7 @@ func canonicalToolName(tool string) string {
 
 var wardControlPlaneCommands = map[string]bool{
 	"set":         true,
+	"status":      true,
 	"enter":       true,
 	"leave":       true,
 	"allow":       true,

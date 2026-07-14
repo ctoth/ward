@@ -318,6 +318,7 @@ func TestEvaluateAlwaysAllowsExactWardControlPlaneCommands(t *testing.T) {
 	commands := []string{
 		"ward --help",
 		"ward set coder",
+		"ward status --json",
 		"ward enter adversary",
 		"ward leave",
 		"ward allow approved",
