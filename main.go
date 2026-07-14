@@ -46,6 +46,18 @@ func main() {
 			os.Exit(0)
 		}
 		cmdSet()
+	case "enter":
+		if hasHelpFlag(os.Args[2:]) {
+			fmt.Fprintln(os.Stderr, helpEnter)
+			os.Exit(0)
+		}
+		cmdEnter()
+	case "leave":
+		if hasHelpFlag(os.Args[2:]) {
+			fmt.Fprintln(os.Stderr, helpLeave)
+			os.Exit(0)
+		}
+		cmdLeave()
 	case "allow":
 		if hasHelpFlag(os.Args[2:]) {
 			fmt.Fprintln(os.Stderr, helpAllow)
@@ -179,6 +191,8 @@ Usage:
 Commands:
   eval          Evaluate a tool call event from stdin
   set           Set one actor's phase
+  enter         Enter a scoped phase and remember the current phase
+  leave         Leave a scoped phase and restore the previous phase
   allow         Add a one-time override signal
   adopt         Grant commit authority for exact repo-relative paths
   discard       Grant discard authority for exact repo-relative paths
@@ -249,6 +263,25 @@ events that omit actor identity continue to use that actor. An explicit
 
 Example:
   ward set implementing --session abc`
+
+const helpEnter = `ward enter - enter a scoped phase
+
+Pushes the actor's current phase and activates the requested phase. Pair every
+successful enter with ward leave so the previous phase is restored.
+
+Usage:
+  ward enter <phase> [--session ID] [--agent ID]
+
+Example:
+  ward enter adversary --session abc`
+
+const helpLeave = `ward leave - leave a scoped phase
+
+Restores the phase saved by the actor's most recent ward enter. Fails when the
+actor has no entered phase to leave.
+
+Usage:
+  ward leave [--session ID] [--agent ID]`
 
 const helpValidate = `ward validate - validate the effective installed config
 
@@ -720,6 +753,45 @@ func cmdSet() {
 		os.Exit(1)
 	}
 	fmt.Fprintf(os.Stderr, "ward: phase → %s\n", phase)
+}
+
+func cmdEnter() {
+	if len(os.Args) < 3 {
+		fmt.Fprintln(os.Stderr, "usage: ward enter <phase> [--session ID] [--agent ID]")
+		os.Exit(1)
+	}
+	phase := os.Args[2]
+	key, err := commandStateKey()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ward: resolve state identity: %v\n", err)
+		os.Exit(1)
+	}
+	if err := UpdateState(key, DefaultPhase, func(state *State) error {
+		state.EnterPhase(phase)
+		return nil
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "ward: save state: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Fprintf(os.Stderr, "ward: entered phase %s\n", phase)
+}
+
+func cmdLeave() {
+	key, err := commandStateKey()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ward: resolve state identity: %v\n", err)
+		os.Exit(1)
+	}
+	phase := ""
+	if err := UpdateState(key, DefaultPhase, func(state *State) error {
+		var leaveErr error
+		phase, leaveErr = state.LeavePhase()
+		return leaveErr
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "ward: leave phase: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Fprintf(os.Stderr, "ward: phase restored to %s\n", phase)
 }
 
 func cmdValidate() {

@@ -288,6 +288,8 @@ func TestEvaluateAlwaysAllowsExactWardControlPlaneCommands(t *testing.T) {
 	commands := []string{
 		"ward --help",
 		"ward set coder",
+		"ward enter adversary",
+		"ward leave",
 		"ward allow approved",
 		"ward adopt docs/report.md",
 		"ward discard scratch.txt",
@@ -315,6 +317,35 @@ func TestEvaluateAlwaysAllowsExactWardControlPlaneCommands(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestStatePhaseScopeRestoresPreviousPhase(t *testing.T) {
+	state := NewState("implementing")
+
+	state.EnterPhase("adversary")
+	state.EnterPhase("researcher")
+	if state.Phase != "researcher" {
+		t.Fatalf("nested phase = %q, want researcher", state.Phase)
+	}
+
+	phase, err := state.LeavePhase()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if phase != "adversary" || state.Phase != "adversary" {
+		t.Fatalf("first leave restored %q/%q, want adversary", phase, state.Phase)
+	}
+
+	phase, err = state.LeavePhase()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if phase != "implementing" || state.Phase != "implementing" {
+		t.Fatalf("second leave restored %q/%q, want implementing", phase, state.Phase)
+	}
+	if _, err := state.LeavePhase(); err == nil {
+		t.Fatal("leave with no entered phase succeeded")
 	}
 }
 
@@ -1996,6 +2027,52 @@ func TestCdPrefixedGitEvaluatesAgainstTargetRepo(t *testing.T) {
 	}
 	if result != nil && result.Action == "deny" {
 		t.Fatalf("cd-prefixed owned add must not deny, got %+v", result)
+	}
+}
+
+func TestAbsoluteGitPathSelectsItsRepositoryWhenHookCWDisStale(t *testing.T) {
+	rules, err := LoadRulesFromDir("builtin_profiles/git-discipline/rules")
+	if err != nil {
+		t.Fatal(err)
+	}
+	guard, err := NewGuard(nil, rules)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	repoA := initTestRepo(t)
+	repoB := initTestRepo(t)
+	target := filepath.Join(repoB, "owned.txt")
+	if err := os.WriteFile(target, []byte("owned\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	state := NewState("implementing")
+	statusA, err := ComputeRepoStatus(repoA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.SyncRepo(statusA)
+	if _, err := grantPaths(state, "adopt", repoA, []string{target}); err != nil {
+		t.Fatal(err)
+	}
+	state.SyncRepo(statusA) // Codex hook reports the parent session cwd.
+
+	event := gitBashEvent(t, repoA, "git add -- "+NormalizePath(target))
+	if got := EffectiveRepoDir(event); got != NormalizePath(repoB) {
+		t.Fatalf("effective repo = %q, want absolute target repo %q", got, NormalizePath(repoB))
+	}
+	statusB, err := ComputeRepoStatus(EffectiveRepoDir(event))
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.SyncRepo(statusB)
+	result, _, err := Evaluate(guard, state, event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != nil && result.Action == "deny" {
+		t.Fatalf("absolute adopted path was denied from stale hook cwd: %+v", result)
 	}
 }
 

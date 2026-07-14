@@ -295,6 +295,7 @@ type State struct {
 	ActorKey           string            `json:"actor_key"`
 	AgentType          string            `json:"agent_type,omitempty"`
 	Phase              string            `json:"phase"`
+	PhaseStack         []string          `json:"phase_stack,omitempty"`
 	History            []string          `json:"history"`
 	Signals            map[string]Signal `json:"signals"`
 	StartedAt          time.Time         `json:"started_at"`
@@ -326,6 +327,7 @@ func NewState(phase string) *State {
 	}
 	return &State{
 		Phase:              phase,
+		PhaseStack:         []string{},
 		History:            []string{},
 		Signals:            make(map[string]Signal),
 		StartedAt:          time.Now(),
@@ -335,6 +337,21 @@ func NewState(phase string) *State {
 		AdoptedPaths:       []string{},
 		DiscardablePaths:   []string{},
 	}
+}
+
+func (s *State) EnterPhase(phase string) {
+	s.PhaseStack = append(s.PhaseStack, s.Phase)
+	s.Phase = phase
+}
+
+func (s *State) LeavePhase() (string, error) {
+	if len(s.PhaseStack) == 0 {
+		return s.Phase, fmt.Errorf("no entered phase to leave")
+	}
+	last := len(s.PhaseStack) - 1
+	s.Phase = s.PhaseStack[last]
+	s.PhaseStack = s.PhaseStack[:last]
+	return s.Phase, nil
 }
 
 func (s *State) Update(tool string, input map[string]any) {
@@ -1374,7 +1391,21 @@ func enrichCommandRepoContext(input map[string]any, cwd string) {
 
 		hasDir := false
 		hasDot := false
+		normalizedPaths := make([]string, 0, len(paths))
 		for _, path := range paths {
+			if isAbsShellPath(path) {
+				relative, err := filepath.Rel(
+					filepath.FromSlash(status.Root),
+					filepath.FromSlash(path),
+				)
+				if err == nil {
+					relative = NormalizePath(relative)
+					if relative != ".." && !strings.HasPrefix(relative, "../") {
+						path = relative
+					}
+				}
+			}
+			normalizedPaths = append(normalizedPaths, path)
 			if path == "." {
 				hasDot = true
 			}
@@ -1383,6 +1414,7 @@ func enrichCommandRepoContext(input map[string]any, cwd string) {
 				hasDir = true
 			}
 		}
+		cmd["git_paths"] = stringListToAny(uniquePaths(normalizedPaths))
 		cmd["git_has_directory_path"] = hasDir
 		cmd["git_has_dot_path"] = hasDot
 	}
@@ -1407,7 +1439,7 @@ func computeFact(fact Fact, cwd string) (any, error) {
 
 func canonicalToolName(tool string) string {
 	switch tool {
-	case "local_shell":
+	case "local_shell", "exec_command", "functions.exec_command":
 		return "Bash"
 	case "apply_patch":
 		return "Edit"
@@ -1418,6 +1450,8 @@ func canonicalToolName(tool string) string {
 
 var wardControlPlaneCommands = map[string]bool{
 	"set":         true,
+	"enter":       true,
+	"leave":       true,
 	"allow":       true,
 	"adopt":       true,
 	"discard":     true,
@@ -1468,7 +1502,24 @@ func commandsFromInput(input map[string]any) []ParsedCommand {
 			if name == "" && full == "" {
 				continue
 			}
-			parsed = append(parsed, ParsedCommand{Name: name, Full: full})
+			args, _ := stringSlice(cmd["args"])
+			via, _ := stringSlice(cmd["via"])
+			gitArgs, _ := stringSlice(cmd["git_args"])
+			gitPaths, _ := stringSlice(cmd["git_paths"])
+			gitSubcommand, _ := cmd["git_subcommand"].(string)
+			gitCategory, _ := cmd["git_category"].(string)
+			readOnly, _ := cmd["read_only"].(bool)
+			parsed = append(parsed, ParsedCommand{
+				Name:          name,
+				Args:          args,
+				Via:           via,
+				Full:          full,
+				GitSubcommand: gitSubcommand,
+				GitArgs:       gitArgs,
+				GitCategory:   gitCategory,
+				GitPaths:      gitPaths,
+				ReadOnly:      readOnly,
+			})
 		}
 		if len(parsed) > 0 {
 			return parsed

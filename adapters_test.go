@@ -192,6 +192,71 @@ func TestDetectCodexTreatsArgvAsSingleCommand(t *testing.T) {
 	}
 }
 
+func TestDetectCodexCompatiblePreToolCmdAlias(t *testing.T) {
+	data := []byte(`{
+		"hook_event_name":"PreToolUse",
+		"session_id":"codex-pretool-session",
+		"cwd":"C:/repo-a",
+		"tool_name":"Bash",
+		"tool_input":{
+			"cmd":"ward enter adversary",
+			"workdir":"C:/repo-b"
+		}
+	}`)
+
+	event, _, err := DetectAndParse(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := event.Input["command"]; got != "ward enter adversary" {
+		t.Fatalf("normalized command = %#v, want ward enter adversary", got)
+	}
+	if event.CWD != "C:/repo-b" {
+		t.Fatalf("CWD = %q, want cmd workdir", event.CWD)
+	}
+	if !isWardControlPlaneCommand(event.Input) {
+		t.Fatalf("cmd alias was not recognized as an exact Ward control-plane command: %#v", event.Input)
+	}
+}
+
+func TestDetectCodexExecCommandCmdAlias(t *testing.T) {
+	data := []byte(`{
+		"session_id":"codex-exec-session",
+		"cwd":"C:/repo-a",
+		"hook_event":{
+			"event_type":"before_tool_use",
+			"tool_name":"exec_command",
+			"tool_input":{
+				"params":{
+					"cmd":"Get-Content -Raw AGENTS.md",
+					"workdir":"C:/repo-b"
+				}
+			}
+		}
+	}`)
+
+	event, agent, err := DetectAndParse(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agent != AgentCodex {
+		t.Fatalf("agent = %v, want Codex", agent)
+	}
+	if canonicalToolName(event.Tool) != "Bash" {
+		t.Fatalf("canonical tool = %q, want Bash", canonicalToolName(event.Tool))
+	}
+	if event.EventType != "pre_tool" {
+		t.Fatalf("event type = %q, want pre_tool", event.EventType)
+	}
+	if got := event.Input["command"]; got != "Get-Content -Raw AGENTS.md" {
+		t.Fatalf("normalized command = %#v, want Get-Content command", got)
+	}
+	commands, ok := event.Input["commands"].([]any)
+	if !ok || len(commands) != 1 {
+		t.Fatalf("parsed commands = %#v, want one command", event.Input["commands"])
+	}
+}
+
 func TestDetectCodexLocalShellUsesWorkdirAsCWD(t *testing.T) {
 	data := []byte(`{
 		"session_id":"codex-workdir-session",
@@ -336,6 +401,17 @@ func TestParsedCommandMapsExposeGitMetadata(t *testing.T) {
 	paths, ok := first["git_paths"].([]any)
 	if !ok || len(paths) != 1 || paths[0] != "src/main.go" {
 		t.Fatalf("expected git_paths with src/main.go, got %#v", first["git_paths"])
+	}
+}
+
+func TestParsedCommandMapsExposeReadOnlyClassification(t *testing.T) {
+	commands := parsedCommandMaps(ParseCommands("Get-Content -Raw AGENTS.md"))
+	if len(commands) != 1 {
+		t.Fatalf("expected 1 command map, got %d", len(commands))
+	}
+	first := commands[0].(map[string]any)
+	if first["read_only"] != true {
+		t.Fatalf("read_only = %#v, want true", first["read_only"])
 	}
 }
 

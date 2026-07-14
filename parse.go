@@ -16,6 +16,7 @@ type ParsedCommand struct {
 	GitArgs       []string
 	GitCategory   string   // query, stage, commit, switch, restore, integrate, push, tag, history_rewrite, workspace_destructive
 	GitPaths      []string // repo-relative path operands, when syntactically recoverable
+	ReadOnly      bool     // command belongs to Ward's narrow discovery allowlist
 	// Dir is the directory this command effectively runs in, relative to the
 	// event cwd unless absolute: preceding `cd <path>` commands in the same
 	// shell string compose into it, and git's global `-C <path>` composes on
@@ -196,15 +197,64 @@ func isAbsShellPath(p string) bool {
 }
 
 func annotateParsedCommand(cmd ParsedCommand) ParsedCommand {
-	if cmd.Name != "git" {
-		return cmd
+	if strings.EqualFold(cmd.Name, "git") {
+		subcommand, gitArgs := parseGitInvocation(cmd.Args)
+		cmd.GitSubcommand = subcommand
+		cmd.GitArgs = gitArgs
+		cmd.GitCategory = classifyGitCommand(subcommand, gitArgs)
+		cmd.GitPaths = gitPathspecs(subcommand, gitArgs)
 	}
-	subcommand, gitArgs := parseGitInvocation(cmd.Args)
-	cmd.GitSubcommand = subcommand
-	cmd.GitArgs = gitArgs
-	cmd.GitCategory = classifyGitCommand(subcommand, gitArgs)
-	cmd.GitPaths = gitPathspecs(subcommand, gitArgs)
+	cmd.ReadOnly = classifyReadOnlyCommand(cmd)
 	return cmd
+}
+
+func classifyReadOnlyCommand(cmd ParsedCommand) bool {
+	if len(cmd.Via) != 0 {
+		return false
+	}
+
+	switch strings.ToLower(cmd.Name) {
+	case "rg":
+		return !containsArgOrPrefix(cmd.Args, "--pre", "--pre=")
+	case "git":
+		if cmd.GitCategory != "query" || !containsString(
+			[]string{"status", "diff", "log", "show", "rev-parse"},
+			cmd.GitSubcommand,
+		) {
+			return false
+		}
+		return !containsArgOrPrefix(
+			cmd.Args,
+			"-c",
+			"--config-env",
+			"--config-env=",
+			"--ext-diff",
+			"--textconv",
+			"--output",
+			"--output=",
+		)
+	case "get-content", "select-object":
+		return true
+	default:
+		return false
+	}
+}
+
+func containsArgOrPrefix(args []string, needles ...string) bool {
+	for _, arg := range args {
+		for _, needle := range needles {
+			if strings.HasSuffix(needle, "=") {
+				if strings.HasPrefix(arg, needle) {
+					return true
+				}
+				continue
+			}
+			if arg == needle {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // commandWrappers are programs that run another command given as their

@@ -88,8 +88,16 @@ func DetectAndParse(data []byte) (ToolEvent, AgentType, error) {
 // []ParsedCommand is kept on the event for evaluation-side logic (effective
 // repo dir) that should not round-trip through the CEL map encoding.
 func enrichBashCommands(event *ToolEvent) {
-	if event.Tool != "Bash" && event.Tool != "local_shell" {
+	if canonicalToolName(event.Tool) != "Bash" {
 		return
+	}
+	if _, exists := event.Input["command"]; !exists {
+		if parts, ok := stringSlice(event.Input["cmd"]); ok && len(parts) > 0 {
+			event.Input["command"] = joinStrings(parts)
+			event.Input["command_argv"] = parts
+		} else if command, ok := event.Input["cmd"].(string); ok && command != "" {
+			event.Input["command"] = command
+		}
 	}
 	if parts, ok := stringSlice(event.Input["command_argv"]); ok && len(parts) > 0 {
 		event.Parsed = parseArgvCommand(parts)
@@ -125,10 +133,21 @@ func EffectiveRepoDir(event ToolEvent) string {
 		if cmd.Name != "git" {
 			continue
 		}
-		if cmd.Dir == "" {
-			return event.CWD
+		if cmd.Dir != "" {
+			return resolveShellPath(event.CWD, cmd.Dir)
 		}
-		return resolveShellPath(event.CWD, cmd.Dir)
+		for _, path := range cmd.GitPaths {
+			if !isAbsShellPath(path) {
+				continue
+			}
+			for _, candidate := range []string{path, parentDir(path)} {
+				status, err := ComputeRepoStatus(candidate)
+				if err == nil && status != nil && status.InGit {
+					return status.Root
+				}
+			}
+		}
+		return event.CWD
 	}
 	return event.CWD
 }
@@ -213,6 +232,9 @@ func parseClaude(raw map[string]any, eventName string) (ToolEvent, AgentType, er
 	} else {
 		event.Input = make(map[string]any)
 	}
+	if workdir := strField(event.Input, "workdir"); workdir != "" {
+		event.CWD = resolveShellPath(event.CWD, workdir)
+	}
 
 	switch eventName {
 	case "PreToolUse":
@@ -238,6 +260,9 @@ func parseGemini(raw map[string]any, eventName string) (ToolEvent, AgentType, er
 	} else {
 		event.Input = make(map[string]any)
 	}
+	if workdir := strField(event.Input, "workdir"); workdir != "" {
+		event.CWD = resolveShellPath(event.CWD, workdir)
+	}
 
 	switch eventName {
 	case "BeforeTool":
@@ -255,7 +280,10 @@ func parseCodex(raw map[string]any, hookEvent map[string]any) (ToolEvent, AgentT
 		AgentID:   strField(raw, "agent_id"),
 		AgentType: strField(raw, "agent_type"),
 		CWD:       strField(raw, "cwd"),
-		EventType: "post_tool", // Codex only has after-events
+		EventType: "post_tool",
+	}
+	if strings.HasPrefix(strField(hookEvent, "event_type"), "before") {
+		event.EventType = "pre_tool"
 	}
 
 	event.Tool = strField(hookEvent, "tool_name")
@@ -462,6 +490,7 @@ func parsedCommandMaps(parsed []ParsedCommand) []any {
 			"git_args":       gitArgs,
 			"git_category":   p.GitCategory,
 			"git_paths":      gitPaths,
+			"read_only":      p.ReadOnly,
 		}
 	}
 	return commands

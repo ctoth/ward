@@ -112,6 +112,42 @@ func TestParseSafeCommandWithDangerousArgs(t *testing.T) {
 	}
 }
 
+func TestParseClassifiesReadOnlyDiscoveryCommands(t *testing.T) {
+	tests := []struct {
+		command string
+		want    []bool
+	}{
+		{command: "rg -n phase .", want: []bool{true}},
+		{command: "git status --short", want: []bool{true}},
+		{command: "git diff --stat", want: []bool{true}},
+		{command: "git log -5 --oneline", want: []bool{true}},
+		{command: "git show HEAD:AGENTS.md", want: []bool{true}},
+		{command: "git rev-parse HEAD", want: []bool{true}},
+		{command: "Get-Content -Raw AGENTS.md", want: []bool{true}},
+		{command: "Get-Content AGENTS.md | Select-Object -First 10", want: []bool{true, true}},
+		{command: "rg --pre cat phase .", want: []bool{false}},
+		{command: "git diff --output=diff.txt", want: []bool{false}},
+		{command: "git show --textconv HEAD:file", want: []bool{false}},
+		{command: "git config --get user.name", want: []bool{false}},
+		{command: "Get-Content AGENTS.md | Set-Content copy.md", want: []bool{true, false}},
+		{command: "Remove-Item AGENTS.md", want: []bool{false}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.command, func(t *testing.T) {
+			commands := ParseCommands(tt.command)
+			if len(commands) != len(tt.want) {
+				t.Fatalf("parsed %d commands, want %d: %#v", len(commands), len(tt.want), commands)
+			}
+			for i, command := range commands {
+				if command.ReadOnly != tt.want[i] {
+					t.Errorf("command[%d] %q read_only = %t, want %t", i, command.Full, command.ReadOnly, tt.want[i])
+				}
+			}
+		})
+	}
+}
+
 func TestParseGitCommitWithPythonInMessage(t *testing.T) {
 	// git commit message containing "python -c" should NOT produce python command
 	cmds := ParseCommands(`git commit -m "python -c is forbidden"`)
