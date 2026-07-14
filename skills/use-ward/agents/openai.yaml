@@ -1,0 +1,4 @@
+interface:
+  display_name: "Use Ward"
+  short_description: "Operate safely in Ward-guarded repositories"
+  default_prompt: "Use $use-ward to follow Ward policy and recover correctly from any guard decision."
