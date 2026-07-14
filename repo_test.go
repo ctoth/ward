@@ -221,8 +221,7 @@ func initTestRepo(t *testing.T) string {
 	t.Helper()
 	repo := t.TempDir()
 	gitRun(t, repo, "init")
-	gitRun(t, repo, "config", "user.name", "Ward Test")
-	gitRun(t, repo, "config", "user.email", "ward@example.com")
+	gitRun(t, repo, "config", "core.fsmonitor", "false")
 	return repo
 }
 
@@ -230,6 +229,12 @@ func gitRun(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
+	cmd.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME=Ward Test",
+		"GIT_AUTHOR_EMAIL=ward@example.com",
+		"GIT_COMMITTER_NAME=Ward Test",
+		"GIT_COMMITTER_EMAIL=ward@example.com",
+	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("git %v failed: %v\n%s", args, err, string(out))
