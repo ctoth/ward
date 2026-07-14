@@ -33,15 +33,16 @@
 | Skip unobservable repository discovery | Rules without `repo.*` cannot observe live Git state | Previously slow custom-rule group passes in 0.153 seconds; full suite passes in 11.452 seconds | Rule evaluation itself as the cost | Unobservable live Git discovery |
 | Inject snapshots into higher-level Git policy tests | Policy tests need repository activation, not repeated Git mechanics | Four-test group passes in 0.203 seconds; full suite passes in 7.799 seconds | Event parsing, state transitions, or CEL as the cost | Redundant real-Git setup in policy tests |
 | Parameterize higher-level repository resolution | Path-policy tests need deterministic repository identity, not repeated Git subprocesses | Three-test path group passes in 0.157 seconds; full suite passes in 5.762 seconds | Path logic as the cost | Redundant live repository discovery |
+| Reuse the compiled test executable for CLI integration | Building Ward inside its already-built test binary is redundant | Installer integration passes in 0.335 seconds; full suite passes in 3.003 and 2.607 seconds on consecutive uncached runs | Installer behavior as the cost | Redundant nested compilation |
 
 ## Current Best Theory
 
-Repeated external-process startup is the root cause. Consolidating and reusing repository snapshots, disabling inherited fsmonitor, injecting exact fixtures, skipping unobservable discovery, and parameterizing higher-level resolution reduced the suite from 65.532 to 5.762 seconds. Dedicated command-backed fact and real repository-status coverage remain. The installer build is now the dominant cost.
+Repeated external-process startup was the root cause. Consolidating and reusing repository snapshots, disabling inherited fsmonitor, injecting exact fixtures, skipping unobservable discovery, parameterizing higher-level resolution, and reusing the compiled test executable reduced the suite from 65.532 seconds to consecutive uncached runs of 3.003 and 2.607 seconds. Dedicated command-backed fact, real repository-status, and real child-process CLI coverage remain. The final runs created no fsmonitor daemon.
 
 ## Open Questions
 
-- How much runtime remains in real-Git higher-level policy tests versus the dedicated repository integration test.
+- None.
 
 ## Next Action
 
-Commit the measured resolver improvement, then remove redundant compilation from the installer integration test without replacing its real executable behavior.
+Complete: consecutive uncached full-suite runs are under five seconds, no fsmonitor daemon leaked, and the final diff is scoped to the installer integration mechanism plus this record.

@@ -11,6 +11,16 @@ import (
 	captainhook "github.com/ctoth/captain-hook"
 )
 
+const testCLIEnv = "WARD_TEST_CLI"
+
+func TestMain(m *testing.M) {
+	if os.Getenv(testCLIEnv) == "1" {
+		main()
+		return
+	}
+	os.Exit(m.Run())
+}
+
 func TestWardHookSpecsIncludeActorAndFamilyLifecycleCleanup(t *testing.T) {
 	specs := wardHookSpecs()
 	want := map[string]string{
@@ -98,9 +108,16 @@ func TestCodexInstallAndUninstallPreserveUnrelatedHooks(t *testing.T) {
 	binDir := t.TempDir()
 	wardBinary := filepath.Join(binDir, "ward.exe")
 
-	build := exec.Command("go", "build", "-o", wardBinary, ".")
-	if output, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build ward: %v\n%s", err, output)
+	testBinary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	testBinaryData, err := os.ReadFile(testBinary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(wardBinary, testBinaryData, 0o755); err != nil {
+		t.Fatalf("copy test executable as ward: %v", err)
 	}
 
 	path := filepath.Join(home, ".codex", "hooks.json")
@@ -131,6 +148,7 @@ func TestCodexInstallAndUninstallPreserveUnrelatedHooks(t *testing.T) {
 		t.Helper()
 		cmd := exec.Command(wardBinary, args...)
 		cmd.Env = append(os.Environ(),
+			testCLIEnv+"=1",
 			"HOME="+home,
 			"USERPROFILE="+home,
 			"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
