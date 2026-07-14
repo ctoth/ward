@@ -559,42 +559,58 @@ func cmdGrantPaths(kind string) {
 	}
 
 	cwd, _ := os.Getwd()
-	repoStatus, err := ComputeRepoStatus(cwd)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "ward: resolve repo for %s: %v\n", kind, err)
-		os.Exit(1)
-	}
-	if repoStatus == nil || !repoStatus.InGit {
-		fmt.Fprintf(os.Stderr, "ward: %s requires running inside a git repo\n", kind)
-		os.Exit(1)
-	}
-	normalized := make([]string, 0, len(rawPaths))
-	for _, rawPath := range rawPaths {
-		path, err := normalizeGrantPath(repoStatus.Root, cwd, rawPath)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "ward: %s path %q: %v\n", kind, rawPath, err)
-			os.Exit(1)
-		}
-		normalized = append(normalized, path)
-	}
-
+	var normalized []string
 	if err := UpdateState(key, DefaultPhase, func(state *State) error {
-		state.SyncRepo(repoStatus)
-		switch kind {
-		case "adopt":
-			state.AdoptedPaths = uniquePaths(append(state.AdoptedPaths, normalized...))
-		case "discard":
-			state.DiscardablePaths = uniquePaths(append(state.DiscardablePaths, normalized...))
-		default:
-			return fmt.Errorf("unknown grant kind %q", kind)
-		}
-		return nil
+		var err error
+		normalized, err = grantPaths(state, kind, cwd, rawPaths)
+		return err
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "ward: save state: %v\n", err)
 		os.Exit(1)
 	}
 
 	fmt.Fprintf(os.Stderr, "ward: %s granted for %s\n", kind, strings.Join(normalized, ", "))
+}
+
+func grantPaths(state *State, kind, cwd string, rawPaths []string) ([]string, error) {
+	normalized := make([]string, 0, len(rawPaths))
+	for _, rawPath := range rawPaths {
+		if rawPath == "" {
+			return nil, fmt.Errorf("%s path: empty path", kind)
+		}
+
+		targetPath := rawPath
+		if !filepath.IsAbs(targetPath) {
+			targetPath = filepath.Join(cwd, targetPath)
+		}
+		absPath, err := filepath.Abs(targetPath)
+		if err != nil {
+			return nil, fmt.Errorf("%s path %q: %w", kind, rawPath, err)
+		}
+		repoStatus, err := ComputeRepoStatus(filepath.Dir(absPath))
+		if err != nil {
+			return nil, fmt.Errorf("resolve repo for %s path %q: %w", kind, rawPath, err)
+		}
+		if repoStatus == nil || !repoStatus.InGit {
+			return nil, fmt.Errorf("%s path %q is not inside a git repo", kind, rawPath)
+		}
+		path, err := normalizeGrantPath(repoStatus.Root, cwd, rawPath)
+		if err != nil {
+			return nil, fmt.Errorf("%s path %q: %w", kind, rawPath, err)
+		}
+
+		state.SyncRepo(repoStatus)
+		switch kind {
+		case "adopt":
+			state.AdoptedPaths = uniquePaths(append(state.AdoptedPaths, path))
+		case "discard":
+			state.DiscardablePaths = uniquePaths(append(state.DiscardablePaths, path))
+		default:
+			return nil, fmt.Errorf("unknown grant kind %q", kind)
+		}
+		normalized = append(normalized, path)
+	}
+	return normalized, nil
 }
 
 func cmdRevoke() {

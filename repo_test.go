@@ -154,6 +154,69 @@ func TestNormalizeGrantPath(t *testing.T) {
 	}
 }
 
+func TestGrantPathsAdoptsAbsolutePathInSiblingRepoScope(t *testing.T) {
+	repoA := initTestRepo(t)
+	repoB := initTestRepo(t)
+	target := filepath.Join(repoB, "src", "app.py")
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("package src\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	state := NewState("implementing")
+	statusA, err := ComputeRepoStatus(repoA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.SyncRepo(statusA)
+
+	normalized, err := grantPaths(state, "adopt", repoA, []string{target})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(normalized) != 1 || normalized[0] != "src/app.py" {
+		t.Fatalf("normalized paths = %#v, want [src/app.py]", normalized)
+	}
+	if state.RepoRoot != NormalizePath(repoB) {
+		t.Fatalf("active repo = %q, want sibling repo %q", state.RepoRoot, NormalizePath(repoB))
+	}
+	if len(state.AdoptedPaths) != 1 || state.AdoptedPaths[0] != "src/app.py" {
+		t.Fatalf("sibling adopted paths = %#v, want [src/app.py]", state.AdoptedPaths)
+	}
+
+	state.SyncRepo(statusA)
+	if len(state.AdoptedPaths) != 0 {
+		t.Fatalf("caller repo inherited sibling adoption: %#v", state.AdoptedPaths)
+	}
+	statusB, err := ComputeRepoStatus(repoB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.SyncRepo(statusB)
+	if len(state.AdoptedPaths) != 1 || state.AdoptedPaths[0] != "src/app.py" {
+		t.Fatalf("sibling adoption was not restored: %#v", state.AdoptedPaths)
+	}
+
+	rules, err := LoadRulesFromDir("builtin_profiles/git-discipline/rules")
+	if err != nil {
+		t.Fatal(err)
+	}
+	guard, err := NewGuard(nil, rules)
+	if err != nil {
+		t.Fatal(err)
+	}
+	event := gitBashEvent(t, repoB, "git add -- src/app.py")
+	result, _, err := Evaluate(guard, state, event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != nil && result.Action == "deny" {
+		t.Fatalf("staging explicitly adopted sibling path was denied: %+v", result)
+	}
+}
+
 func initTestRepo(t *testing.T) string {
 	t.Helper()
 	repo := t.TempDir()
