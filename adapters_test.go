@@ -288,6 +288,34 @@ func TestDetectCodexApplyPatchExtractsTouchedPaths(t *testing.T) {
 	}
 }
 
+func TestDetectCodexApplyPatchExtractsTouchedPathsFromHookCommand(t *testing.T) {
+	data := []byte(`{
+		"session_id":"codex-patch-command-session",
+		"cwd":"C:/repo-a",
+		"hook_event":{
+			"event_type":"after_tool_use",
+			"tool_name":"apply_patch",
+			"tool_input":{
+				"command":"*** Begin Patch\n*** Update File: C:\\repo-b\\owned.txt\n@@\n-old\n+new\n*** End Patch"
+			}
+		}
+	}`)
+
+	event, agent, err := DetectAndParse(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agent != AgentCodex {
+		t.Fatalf("agent = %v, want Codex", agent)
+	}
+	if event.Input["file_path"] != "C:/repo-b/owned.txt" {
+		t.Fatalf("file_path = %#v, want command-shaped patched path", event.Input["file_path"])
+	}
+	if got := EffectiveRepoDir(event); got != "C:/repo-b" {
+		t.Fatalf("effective repo dir = %q, want patched file repo", got)
+	}
+}
+
 func TestParsedCommandMapsExposeGitMetadata(t *testing.T) {
 	parsed := parseArgvCommand([]string{"git", "checkout", "--", "src/main.go"})
 	commands := parsedCommandMaps(parsed)

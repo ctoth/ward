@@ -137,8 +137,11 @@ func enrichApplyPatchPaths(event *ToolEvent) {
 	if event.Tool != "apply_patch" {
 		return
 	}
-	patch, ok := event.Input["input"].(string)
-	if !ok || patch == "" {
+	patch := strField(event.Input, "command")
+	if patch == "" {
+		patch = strField(event.Input, "input")
+	}
+	if patch == "" {
 		return
 	}
 
