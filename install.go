@@ -60,7 +60,7 @@ func wardHookSpecs(host string) []captainhook.HookSpec {
 		for i := range specs {
 			command := strconv.Quote(exe) + " " + specs[i].Args[0]
 			specs[i].Command = command
-			specs[i].CommandWindows = command
+			specs[i].CommandWindows = "& " + command
 			specs[i].Args = nil
 		}
 	}

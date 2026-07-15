@@ -231,8 +231,9 @@ func TestCodexInstallAndUninstallPreserveUnrelatedHooks(t *testing.T) {
 	if !strings.Contains(command, `"`) || !strings.HasSuffix(command, " eval") {
 		t.Fatalf("Codex command = %q, want quoted executable plus eval", command)
 	}
-	if wardEntry["commandWindows"] != command {
-		t.Fatalf("commandWindows = %#v, want %q", wardEntry["commandWindows"], command)
+	commandWindows := wardEntry["commandWindows"].(string)
+	if commandWindows != "& "+command {
+		t.Fatalf("commandWindows = %q, want PowerShell call operator plus %q", commandWindows, command)
 	}
 	if _, err := os.Stat(filepath.Join(home, ".claude", "settings.json")); !os.IsNotExist(err) {
 		t.Fatalf("Codex install unexpectedly wrote Claude settings: %v", err)
