@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"os/exec"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -216,6 +218,151 @@ func TestCommandActorBindingCarriesIntoActorlessHook(t *testing.T) {
 	}
 	if hookKey.ActorKey != MainActorKey {
 		t.Fatalf("main rebind resolved actor %q", hookKey.ActorKey)
+	}
+}
+
+func TestCodexRootTurnIgnoresActiveChildBinding(t *testing.T) {
+	session := "codex-root-binding-" + t.Name()
+	t.Cleanup(func() { _ = PurgeSessionFamily(session) })
+	t.Setenv(envActorID, "")
+	if err := bindActiveActor(StateKey{SessionKey: session, ActorKey: "cli-worker"}); err != nil {
+		t.Fatal(err)
+	}
+
+	key, err := stateKeyFromHook(ToolEvent{SessionID: session, TurnID: "root-turn"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if key.ActorKey != MainActorKey {
+		t.Fatalf("Codex root actor = %q, want %q", key.ActorKey, MainActorKey)
+	}
+}
+
+func TestCodexDelegationRoundTripThroughEvalAndCLI(t *testing.T) {
+	session := "codex-delegation-round-trip-" + t.Name()
+	t.Cleanup(func() { _ = PurgeSessionFamily(session) })
+	testBinary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	repo := t.TempDir()
+	cliEnv := append(os.Environ(),
+		testCLIEnv+"=1",
+		"HOME="+home,
+		"USERPROFILE="+home,
+		envActorID+"=",
+		envSession+"=",
+		envCodexThread+"=",
+		envClaudeSession+"=",
+	)
+
+	spawnInput, err := json.Marshal(map[string]any{
+		"session_id":      session,
+		"turn_id":         "parent-turn",
+		"cwd":             repo,
+		"hook_event_name": "PreToolUse",
+		"tool_name":       "spawn_agent",
+		"tool_use_id":     "spawn-call",
+		"tool_input": map[string]any{
+			"task_name":  "review",
+			"fork_turns": "none",
+			"message":    "WARD-DELEGATE/1 phase=researcher\nInspect the parser.",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	spawnCmd := exec.Command(testBinary, "eval")
+	spawnCmd.Dir = repo
+	spawnCmd.Env = cliEnv
+	spawnCmd.Stdin = bytes.NewReader(spawnInput)
+	spawnOutput, err := spawnCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("ward eval spawn: %v\n%s", err, spawnOutput)
+	}
+	var response map[string]any
+	if err := json.Unmarshal(spawnOutput, &response); err != nil {
+		t.Fatalf("decode spawn response %q: %v", spawnOutput, err)
+	}
+	hookOutput, ok := response["hookSpecificOutput"].(map[string]any)
+	if !ok {
+		t.Fatalf("spawn response = %#v", response)
+	}
+	updatedInput, ok := hookOutput["updatedInput"].(map[string]any)
+	if !ok {
+		t.Fatalf("hook output = %#v", hookOutput)
+	}
+	rewrittenMessage, _ := updatedInput["message"].(string)
+	commandPrefix := "ward accept-delegation "
+	var token string
+	for _, line := range strings.Split(rewrittenMessage, "\n") {
+		if strings.HasPrefix(line, commandPrefix) {
+			token = strings.TrimPrefix(line, commandPrefix)
+			break
+		}
+	}
+	if token == "" {
+		t.Fatalf("rewritten message has no acceptance token: %q", rewrittenMessage)
+	}
+
+	childInput, err := json.Marshal(map[string]any{
+		"session_id":      session,
+		"turn_id":         "child-turn",
+		"agent_id":        "opaque-child",
+		"agent_type":      "default",
+		"cwd":             repo,
+		"hook_event_name": "PreToolUse",
+		"tool_name":       "PowerShell",
+		"tool_use_id":     "accept-call",
+		"tool_input":      map[string]any{"command": commandPrefix + token},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	childCmd := exec.Command(testBinary, "eval")
+	childCmd.Dir = repo
+	childCmd.Env = cliEnv
+	childCmd.Stdin = bytes.NewReader(childInput)
+	childOutput, err := childCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("ward eval child acceptance: %v\n%s", err, childOutput)
+	}
+	if len(bytes.TrimSpace(childOutput)) != 0 {
+		t.Fatalf("allowed child acceptance output = %q, want empty", childOutput)
+	}
+	state, err := LoadState(StateKey{SessionKey: session, ActorKey: "opaque-child"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Phase != "researcher" || state.DelegatedByActor != MainActorKey {
+		t.Fatalf("child state = %#v", state)
+	}
+
+	acceptCmd := exec.Command(testBinary, "accept-delegation", token)
+	acceptCmd.Env = cliEnv
+	acceptOutput, err := acceptCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("ward accept-delegation: %v\n%s", err, acceptOutput)
+	}
+	if !strings.Contains(string(acceptOutput), "actor opaque-child, phase researcher") {
+		t.Fatalf("accept output = %q", acceptOutput)
+	}
+
+	replayCmd := exec.Command(testBinary, "eval")
+	replayCmd.Dir = repo
+	replayCmd.Env = cliEnv
+	replayCmd.Stdin = bytes.NewReader(childInput)
+	replayOutput, err := replayCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("ward eval replay: %v\n%s", err, replayOutput)
+	}
+	if err := json.Unmarshal(replayOutput, &response); err != nil {
+		t.Fatalf("decode replay response %q: %v", replayOutput, err)
+	}
+	hookOutput, ok = response["hookSpecificOutput"].(map[string]any)
+	if !ok || hookOutput["permissionDecision"] != "deny" {
+		t.Fatalf("replay response = %#v, want deny", response)
 	}
 }
 

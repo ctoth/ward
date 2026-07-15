@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 const envSession = "WARD_SESSION"
@@ -113,6 +114,12 @@ func main() {
 			os.Exit(0)
 		}
 		cmdEndActor()
+	case "accept-delegation":
+		if hasHelpFlag(os.Args[2:]) {
+			fmt.Fprintln(os.Stderr, helpAcceptDelegation)
+			os.Exit(0)
+		}
+		cmdAcceptDelegation()
 	case "install":
 		if hasHelpFlag(os.Args[2:]) {
 			fmt.Fprintln(os.Stderr, helpInstall)
@@ -462,6 +469,15 @@ was not active.
 Example:
   ward revoke force-push --session abc`
 
+const helpAcceptDelegation = `ward accept-delegation - redeem a parent-issued child capability
+
+Usage:
+  ward accept-delegation <token>
+
+This must be the first child action named in a Ward-rewritten native Codex
+spawn instruction. The PreToolUse hook binds the grant's phase to the real
+host-supplied child actor identity before this command executes.`
+
 func hasVerboseFlag(args []string) bool {
 	for _, a := range args {
 		if a == "--verbose" || a == "-v" {
@@ -485,6 +501,18 @@ func cmdEval() {
 		fmt.Fprintf(os.Stderr, "ward: parse input: %v\n", err)
 		os.Exit(1)
 	}
+	request, delegationRequested, requestErr := parseDelegationRequest(event)
+	if event.EventType != "pre_tool" {
+		delegationRequested = false
+		requestErr = nil
+	}
+	if requestErr != nil {
+		writeHookResult(agent, event, &Result{Action: "deny", Message: "ward: " + requestErr.Error()})
+		return
+	}
+	if delegationRequested {
+		event.Input["ward_delegation_phase"] = request.Phase
+	}
 
 	// Register CC PID → session_id so `ward allow` can resolve sessions
 	// from the process tree when run via `!` inside Claude Code.
@@ -498,6 +526,12 @@ func cmdEval() {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ward: resolve state identity: %v\n", err)
 		os.Exit(1)
+	}
+	if token, accepting := delegationAcceptanceToken(event); accepting && event.EventType == "pre_tool" {
+		if _, err := consumeDelegation(key, event, token, time.Now()); err != nil {
+			writeHookResult(agent, event, &Result{Action: "deny", Message: "ward: delegation denied: " + err.Error()})
+			return
+		}
 	}
 	initialPhase := DefaultPhase
 	if key.ActorKey != MainActorKey {
@@ -537,11 +571,22 @@ func cmdEval() {
 		fmt.Fprintf(os.Stderr, "ward: evaluate: %v\n", err)
 		os.Exit(1)
 	}
+	if result == nil && delegationRequested {
+		updatedInput, _, err := issueDelegation(key, event, request, time.Now())
+		if err != nil {
+			result = &Result{Action: "deny", Message: "ward: delegation issuance failed: " + err.Error()}
+		} else {
+			result = &Result{Action: "allow", UpdatedInput: updatedInput}
+		}
+	}
 
 	if result == nil {
 		return // allow — no output
 	}
+	writeHookResult(agent, event, result)
+}
 
+func writeHookResult(agent AgentType, event ToolEvent, result *Result) {
 	out, err := EncodeResponse(agent, event.EventType, result)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ward: encode response: %v\n", err)
@@ -551,6 +596,20 @@ func cmdEval() {
 		return
 	}
 	fmt.Println(string(out))
+}
+
+func cmdAcceptDelegation() {
+	if len(os.Args) != 3 {
+		fmt.Fprintln(os.Stderr, "usage: ward accept-delegation <token>")
+		os.Exit(1)
+	}
+	grant, err := verifyConsumedDelegation(os.Args[2])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ward: accept delegation: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Fprintf(os.Stderr, "ward: delegation accepted (session %s, actor %s, phase %s)\n",
+		grant.SessionKey, grant.ConsumedByActor, grant.Phase)
 }
 
 func cmdAllow() {
@@ -1089,6 +1148,9 @@ func readStatusState(args []string, processSession, cwd string) (StateKey, *Stat
 
 func stateKeyFromHook(event ToolEvent) (StateKey, error) {
 	actorKey := event.AgentID
+	if actorKey == "" && event.TurnID != "" {
+		actorKey = MainActorKey
+	}
 	if actorKey == "" {
 		actorKey = os.Getenv(envActorID)
 	}

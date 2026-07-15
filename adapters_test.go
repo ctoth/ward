@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"reflect"
 	"testing"
 )
 
@@ -126,6 +127,9 @@ func TestDetectCodexClaudeCompatiblePayload(t *testing.T) {
 	}
 	if event.SessionID != "codex-session" {
 		t.Fatalf("session = %q, want codex-session", event.SessionID)
+	}
+	if event.TurnID != "codex-turn" {
+		t.Fatalf("turn = %q, want codex-turn", event.TurnID)
 	}
 	if event.ToolUseID != "tool-1" {
 		t.Fatalf("tool use id = %q, want tool-1", event.ToolUseID)
@@ -358,6 +362,27 @@ func TestFormatClaudeDeny(t *testing.T) {
 	}
 	if hook["permissionDecisionReason"] != "blocked" {
 		t.Errorf("expected blocked, got %v", hook["permissionDecisionReason"])
+	}
+}
+
+func TestFormatClaudeAllowIncludesUpdatedInput(t *testing.T) {
+	updatedInput := map[string]any{
+		"message":    "WARD-DELEGATION/1\nward accept-delegation token",
+		"task_name":  "review",
+		"fork_turns": "none",
+	}
+	result := &Result{Action: "allow", UpdatedInput: updatedInput}
+	resp := FormatResponse(AgentClaude, "pre_tool", result)
+
+	hook, ok := resp["hookSpecificOutput"].(map[string]any)
+	if !ok {
+		t.Fatal("expected hookSpecificOutput")
+	}
+	if hook["permissionDecision"] != "allow" {
+		t.Fatalf("permission decision = %#v, want allow", hook["permissionDecision"])
+	}
+	if !reflect.DeepEqual(hook["updatedInput"], updatedInput) {
+		t.Fatalf("updated input = %#v, want %#v", hook["updatedInput"], updatedInput)
 	}
 }
 

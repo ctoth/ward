@@ -32,6 +32,7 @@ type ToolEvent struct {
 	SessionID  string
 	AgentID    string // stable actor identity supplied by the host
 	AgentType  string // role metadata; never part of the storage key
+	TurnID     string // Codex turn identity; present on native Codex hook events
 	EventType  string // "pre_tool", "post_tool"
 	ToolUseID  string // correlates pre/post events for one tool invocation
 	ToolFailed bool   // true for an explicit post-tool failure event
@@ -222,6 +223,7 @@ func parseClaude(raw map[string]any, eventName string) (ToolEvent, AgentType, er
 		SessionID:  strField(raw, "session_id"),
 		AgentID:    strField(raw, "agent_id"),
 		AgentType:  strField(raw, "agent_type"),
+		TurnID:     strField(raw, "turn_id"),
 		ToolUseID:  strField(raw, "tool_use_id"),
 		ToolFailed: eventName == "PostToolUseFailure",
 		CWD:        strField(raw, "cwd"),
@@ -321,12 +323,14 @@ func formatClaude(r *Result) map[string]any {
 			},
 		}
 	case "allow":
-		return map[string]any{
-			"hookSpecificOutput": map[string]any{
-				"hookEventName":      "PreToolUse",
-				"permissionDecision": "allow",
-			},
+		hookOutput := map[string]any{
+			"hookEventName":      "PreToolUse",
+			"permissionDecision": "allow",
 		}
+		if r.UpdatedInput != nil {
+			hookOutput["updatedInput"] = r.UpdatedInput
+		}
+		return map[string]any{"hookSpecificOutput": hookOutput}
 	default:
 		return nil
 	}
