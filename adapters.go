@@ -127,11 +127,11 @@ func effectiveRepoDirWithStatus(event ToolEvent, activeRepo string, repoStatus f
 		if cmd.Name != "git" {
 			continue
 		}
-		if strField(event.Input, "workdir") != "" {
-			return event.CWD
-		}
 		if cmd.Dir != "" {
 			return resolveShellPath(event.CWD, cmd.Dir)
+		}
+		if strField(event.Input, "workdir") != "" {
+			return event.CWD
 		}
 		for _, path := range cmd.GitPaths {
 			if !isAbsShellPath(path) {

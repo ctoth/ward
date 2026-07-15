@@ -240,6 +240,30 @@ func TestEffectiveRepoDirUsesActiveRepoWhenCodexOmitsWorkdir(t *testing.T) {
 	}
 }
 
+func TestEffectiveRepoDirHonorsGitCOverCodexWorkdir(t *testing.T) {
+	data := []byte(`{
+		"session_id":"codex-multi-repo-session",
+		"cwd":"C:/repo-a",
+		"hook_event_name":"PreToolUse",
+		"tool_name":"exec_command",
+		"tool_input":{
+			"cmd":"git -C C:/repo-b add -- spec/tasks.md",
+			"workdir":"C:/repo-a"
+		}
+	}`)
+
+	event, _, err := DetectAndParse(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolveStatus := func(path string) (*RepoStatus, error) {
+		return &RepoStatus{InGit: true, Root: NormalizePath(path)}, nil
+	}
+	if got := effectiveRepoDirWithStatus(event, "C:/repo-a", resolveStatus); got != "C:/repo-b" {
+		t.Fatalf("effective repo dir = %q, want git -C target", got)
+	}
+}
+
 func TestDetectCodexPreservesExplicitActor(t *testing.T) {
 	data := []byte(`{
 		"session_id":"codex-session",
