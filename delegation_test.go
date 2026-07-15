@@ -12,6 +12,7 @@ import (
 func TestParseDelegationRequest(t *testing.T) {
 	tests := []struct {
 		name      string
+		tool      string
 		message   string
 		wantPhase string
 		wantBody  string
@@ -20,6 +21,14 @@ func TestParseDelegationRequest(t *testing.T) {
 	}{
 		{
 			name:      "valid",
+			message:   "WARD-DELEGATE/1 phase=researcher\nInspect the parser.",
+			wantPhase: "researcher",
+			wantBody:  "Inspect the parser.",
+			wantFound: true,
+		},
+		{
+			name:      "Codex collaboration hook alias",
+			tool:      "collaborationspawn_agent",
 			message:   "WARD-DELEGATE/1 phase=researcher\nInspect the parser.",
 			wantPhase: "researcher",
 			wantBody:  "Inspect the parser.",
@@ -56,8 +65,12 @@ func TestParseDelegationRequest(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			tool := tt.tool
+			if tool == "" {
+				tool = "spawn_agent"
+			}
 			event := ToolEvent{
-				Tool:  "spawn_agent",
+				Tool:  tool,
 				Input: map[string]any{"message": tt.message},
 			}
 			got, found, err := parseDelegationRequest(event)
@@ -82,7 +95,7 @@ func TestIssueDelegationRewritesSpawnInputAndPersistsHashedGrant(t *testing.T) {
 	t.Cleanup(func() { _ = PurgeSessionFamily(session) })
 	now := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
 	event := ToolEvent{
-		Tool:      "spawn_agent",
+		Tool:      "collaborationspawn_agent",
 		SessionID: session,
 		TurnID:    "parent-turn",
 		EventType: "pre_tool",

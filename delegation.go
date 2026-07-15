@@ -44,7 +44,7 @@ type DelegationGrant struct {
 }
 
 func parseDelegationRequest(event ToolEvent) (DelegationRequest, bool, error) {
-	if event.Tool != "spawn_agent" {
+	if canonicalToolName(event.Tool) != "spawn_agent" {
 		return DelegationRequest{}, false, nil
 	}
 	message, ok := event.Input["message"].(string)
@@ -77,7 +77,7 @@ func issueDelegation(parentKey StateKey, event ToolEvent, request DelegationRequ
 	if event.SessionID != parentKey.SessionKey {
 		return nil, "", fmt.Errorf("spawn session %q does not match parent session %q", event.SessionID, parentKey.SessionKey)
 	}
-	if event.Tool != "spawn_agent" || event.EventType != "pre_tool" || event.TurnID == "" || event.ToolUseID == "" {
+	if canonicalToolName(event.Tool) != "spawn_agent" || event.EventType != "pre_tool" || event.TurnID == "" || event.ToolUseID == "" {
 		return nil, "", fmt.Errorf("delegation requires a native Codex spawn_agent PreToolUse event")
 	}
 	if !validDelegationPhase.MatchString(request.Phase) {

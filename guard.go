@@ -1526,6 +1526,8 @@ func canonicalToolName(tool string) string {
 		return "Bash"
 	case "apply_patch":
 		return "Edit"
+	case "collaborationspawn_agent":
+		return "spawn_agent"
 	default:
 		return tool
 	}
