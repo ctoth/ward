@@ -303,7 +303,7 @@ func bashEvent(t *testing.T, command string) ToolEvent {
 		SessionID: "test",
 		CWD:       t.TempDir(),
 	}
-	enrichBashCommands(&event)
+	enrichShellCommands(&event)
 	return event
 }
 
@@ -545,7 +545,7 @@ func gitBashEvent(t *testing.T, dir, command string) ToolEvent {
 		SessionID: "test",
 		CWD:       dir,
 	}
-	enrichBashCommands(&event)
+	enrichShellCommands(&event)
 	return event
 }
 

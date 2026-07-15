@@ -63,7 +63,7 @@ func DetectAndParse(data []byte) (ToolEvent, AgentType, error) {
 			return event, agent, err
 		}
 		if event.Tool != "" {
-			enrichBashCommands(&event)
+			enrichShellCommands(&event)
 			return event, agent, nil
 		}
 	}
@@ -71,12 +71,13 @@ func DetectAndParse(data []byte) (ToolEvent, AgentType, error) {
 	return ToolEvent{}, 0, fmt.Errorf("cannot detect agent from JSON (no recognized hook_event_name)")
 }
 
-// enrichBashCommands adds parsed shell commands to Bash tool events.
+// enrichShellCommands adds parsed shell commands to supported shell tool events.
 // input.commands is a list of maps with "name" and "full" keys; the typed
 // []ParsedCommand is kept on the event for evaluation-side logic (effective
 // repo dir) that should not round-trip through the CEL map encoding.
-func enrichBashCommands(event *ToolEvent) {
-	if canonicalToolName(event.Tool) != "Bash" {
+func enrichShellCommands(event *ToolEvent) {
+	toolName := canonicalToolName(event.Tool)
+	if toolName != "Bash" && toolName != "PowerShell" {
 		return
 	}
 	if _, exists := event.Input["command"]; !exists {

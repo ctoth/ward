@@ -136,6 +136,43 @@ func TestDetectCodexClaudeCompatiblePayload(t *testing.T) {
 	}
 }
 
+func TestDetectCodexPowerShellPayloadEnrichesCommands(t *testing.T) {
+	data := []byte(`{
+		"session_id":"codex-session",
+		"turn_id":"codex-turn",
+		"cwd":"C:/repo",
+		"hook_event_name":"PreToolUse",
+		"tool_name":"PowerShell",
+		"tool_input":{"command":"Get-Content -Raw -LiteralPath reports/research.md"},
+		"tool_use_id":"tool-powershell-1"
+	}`)
+
+	event, agent, err := DetectAndParse(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agent != AgentClaude {
+		t.Fatalf("agent = %v, want Claude-compatible payload", agent)
+	}
+	if event.Tool != "PowerShell" {
+		t.Fatalf("tool = %q, want PowerShell", event.Tool)
+	}
+	commands, ok := event.Input["commands"].([]any)
+	if !ok || len(commands) != 1 {
+		t.Fatalf("commands = %#v, want one parsed command", event.Input["commands"])
+	}
+	command, ok := commands[0].(map[string]any)
+	if !ok {
+		t.Fatalf("command = %#v, want command facts", commands[0])
+	}
+	if command["name"] != "Get-Content" {
+		t.Fatalf("name = %#v, want Get-Content", command["name"])
+	}
+	if command["read_only"] != true {
+		t.Fatalf("read_only = %#v, want true", command["read_only"])
+	}
+}
+
 func TestDetectCodexPostToolUsePreservesCorrelation(t *testing.T) {
 	data := []byte(`{
 		"session_id":"codex-session",
