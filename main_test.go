@@ -339,6 +339,21 @@ func TestCodexDelegationRoundTripThroughEvalAndCLI(t *testing.T) {
 		t.Fatalf("child state = %#v", state)
 	}
 
+	startInput := []byte(`{"hook_event_name":"SubagentStart","session_id":"` + session + `","agent_id":"opaque-child","agent_type":"default"}`)
+	if _, err := InitializeActorFromHookInput(startInput); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SetPhaseFromHookInput(startInput, "codex-scout"); err != nil {
+		t.Fatal(err)
+	}
+	state, err = LoadState(StateKey{SessionKey: session, ActorKey: "opaque-child"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Phase != "researcher" || state.DelegatedByActor != MainActorKey || state.DelegationGrantID == "" {
+		t.Fatalf("late host initialization replaced delegated child state: %#v", state)
+	}
+
 	acceptCmd := exec.Command(testBinary, "accept-delegation", token)
 	acceptCmd.Env = cliEnv
 	acceptOutput, err := acceptCmd.CombinedOutput()

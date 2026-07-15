@@ -1201,6 +1201,9 @@ func SetPhaseFromHookInput(input []byte, phase string) (StateKey, error) {
 		return StateKey{}, fmt.Errorf("actor initialization hook has no actor identity")
 	}
 	err = UpdateState(key, phase, func(state *State) error {
+		if state.DelegationGrantID != "" {
+			return nil
+		}
 		state.Phase = phase
 		if event.AgentType != "" {
 			state.AgentType = event.AgentType
@@ -1223,6 +1226,9 @@ func InitializeActorFromHookInput(input []byte) (StateKey, error) {
 		return StateKey{}, fmt.Errorf("SubagentStart input has no actor identity")
 	}
 	err = UpdateState(key, UninitializedPhase, func(state *State) error {
+		if state.DelegationGrantID != "" {
+			return nil
+		}
 		if event.AgentType != "" {
 			state.AgentType = event.AgentType
 		}
