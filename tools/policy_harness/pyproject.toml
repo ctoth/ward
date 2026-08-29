@@ -4,7 +4,7 @@ version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
   "hypothesis>=6.135.0",
-  "pytest>=8.3.0",
+  "pytest>=9.0.3",
 ]
 
 [tool.pytest.ini_options]
