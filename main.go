@@ -341,8 +341,8 @@ const helpInstall = `ward install - register ward hooks in host settings
 
 Adds ward's all-tools PreToolUse and PostToolUse (eval), SubagentStart
 (start-actor), and SubagentStop (end-actor) hooks to the selected host file.
-Claude Code also gets PostToolUseFailure (eval) and SessionEnd (end-session);
-Codex does not expose a terminal session hook.
+Both hosts get SessionEnd (end-session); Claude Code also gets
+PostToolUseFailure (eval), which Codex does not fire.
 Idempotent — safe to run multiple times.
 Preserves all other hooks (claudio, etc).
 

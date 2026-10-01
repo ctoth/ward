@@ -30,9 +30,12 @@ startup. Non-interactive Codex runs execute Ward only after that trust has been
 persisted, or when Codex is explicitly started with
 `--dangerously-bypass-hook-trust`.
 
-Claude Code exposes `SessionEnd`, so Ward automatically retires that session's
-state. Codex currently exposes `Stop` at the end of every turn but no terminal
-session hook; Ward deliberately does not map per-turn `Stop` to session cleanup.
+Claude Code and Codex both expose `SessionEnd`, so Ward automatically retires
+that session's state. Codex fires it when a conversation is archived or
+deleted, when Codex closes normally, or after 30 idle minutes; never for
+subagents. Ward deliberately does not map per-turn `Stop` to session cleanup.
+Which events each host fires comes from
+[Captain Hook](https://github.com/ctoth/captain-hook)'s event catalog.
 
 ## Facts
 
