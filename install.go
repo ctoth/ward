@@ -12,9 +12,16 @@ import (
 
 var wardIdentity = captainhook.CommandIdentity("ward", "ward.exe", filepath.Base(wardExePath()))
 
+// wardHosts maps ward's host names to captain-hook's event catalog.
+var wardHosts = map[string]captainhook.Agent{
+	"claude": captainhook.AgentClaude,
+	"codex":  captainhook.AgentCodex,
+}
+
+// wardHookSpecs returns ward's hooks for every event the host fires.
 func wardHookSpecs(host string) []captainhook.HookSpec {
 	exe := wardExePath()
-	specs := []captainhook.HookSpec{
+	all := []captainhook.HookSpec{
 		{
 			Event:   "PreToolUse",
 			Matcher: "*",
@@ -39,22 +46,29 @@ func wardHookSpecs(host string) []captainhook.HookSpec {
 			Command: exe,
 			Args:    []string{"end-actor"},
 		},
+		{
+			Event:   "PostToolUseFailure",
+			Matcher: "*",
+			Command: exe,
+			Args:    []string{"eval"},
+			Timeout: 5,
+		},
+		{
+			Event:   "SessionEnd",
+			Command: exe,
+			Args:    []string{"end-session"},
+		},
 	}
-	if host == "claude" {
-		specs = append(specs,
-			captainhook.HookSpec{
-				Event:   "PostToolUseFailure",
-				Matcher: "*",
-				Command: exe,
-				Args:    []string{"eval"},
-				Timeout: 5,
-			},
-			captainhook.HookSpec{
-				Event:   "SessionEnd",
-				Command: exe,
-				Args:    []string{"end-session"},
-			},
-		)
+	catalog, ok := captainhook.Lookup(wardHosts[host])
+	if !ok {
+		// wardSettingsPath only returns known hosts.
+		panic(fmt.Sprintf("ward: no hook catalog for host %q", host))
+	}
+	var specs []captainhook.HookSpec
+	for _, spec := range all {
+		if catalog.Supports(spec.Event) {
+			specs = append(specs, spec)
+		}
 	}
 	if host == "codex" {
 		for i := range specs {

@@ -199,7 +199,7 @@ func TestCodexInstallAndUninstallPreserveUnrelatedHooks(t *testing.T) {
 		t.Fatal(err)
 	}
 	hooks := (*installed)["hooks"].(map[string]interface{})
-	for _, event := range []string{"PreToolUse", "PostToolUse", "SubagentStart", "SubagentStop"} {
+	for _, event := range []string{"PreToolUse", "PostToolUse", "SubagentStart", "SubagentStop", "SessionEnd"} {
 		groups, ok := hooks[event].([]interface{})
 		if !ok {
 			t.Fatalf("%s groups = %#v", event, hooks[event])
@@ -212,8 +212,9 @@ func TestCodexInstallAndUninstallPreserveUnrelatedHooks(t *testing.T) {
 			t.Fatalf("%s groups = %d, want %d: %#v", event, len(groups), want, groups)
 		}
 	}
-	if _, exists := hooks["SessionEnd"]; exists {
-		t.Fatalf("Codex install wrote unsupported SessionEnd hook: %#v", hooks["SessionEnd"])
+	sessionEnd := hooks["SessionEnd"].([]interface{})[0].(map[string]interface{})["hooks"].([]interface{})[0].(map[string]interface{})
+	if command := sessionEnd["command"].(string); !strings.HasSuffix(command, " end-session") {
+		t.Fatalf("Codex SessionEnd command = %q, want quoted executable plus end-session", command)
 	}
 	if _, exists := hooks["PostToolUseFailure"]; exists {
 		t.Fatalf("Codex install wrote unsupported PostToolUseFailure hook: %#v", hooks["PostToolUseFailure"])
