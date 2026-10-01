@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"reflect"
 	"testing"
 )
 
@@ -127,12 +128,52 @@ func TestDetectCodexClaudeCompatiblePayload(t *testing.T) {
 	if event.SessionID != "codex-session" {
 		t.Fatalf("session = %q, want codex-session", event.SessionID)
 	}
+	if event.TurnID != "codex-turn" {
+		t.Fatalf("turn = %q, want codex-turn", event.TurnID)
+	}
 	if event.ToolUseID != "tool-1" {
 		t.Fatalf("tool use id = %q, want tool-1", event.ToolUseID)
 	}
 	commands, ok := event.Input["commands"].([]any)
 	if !ok || len(commands) != 1 {
 		t.Fatalf("commands = %#v, want one parsed command", event.Input["commands"])
+	}
+}
+
+func TestDetectCodexPowerShellPayloadEnrichesCommands(t *testing.T) {
+	data := []byte(`{
+		"session_id":"codex-session",
+		"turn_id":"codex-turn",
+		"cwd":"C:/repo",
+		"hook_event_name":"PreToolUse",
+		"tool_name":"PowerShell",
+		"tool_input":{"command":"Get-Content -Raw -LiteralPath reports/research.md"},
+		"tool_use_id":"tool-powershell-1"
+	}`)
+
+	event, agent, err := DetectAndParse(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agent != AgentClaude {
+		t.Fatalf("agent = %v, want Claude-compatible payload", agent)
+	}
+	if event.Tool != "PowerShell" {
+		t.Fatalf("tool = %q, want PowerShell", event.Tool)
+	}
+	commands, ok := event.Input["commands"].([]any)
+	if !ok || len(commands) != 1 {
+		t.Fatalf("commands = %#v, want one parsed command", event.Input["commands"])
+	}
+	command, ok := commands[0].(map[string]any)
+	if !ok {
+		t.Fatalf("command = %#v, want command facts", commands[0])
+	}
+	if command["name"] != "Get-Content" {
+		t.Fatalf("name = %#v, want Get-Content", command["name"])
+	}
+	if command["read_only"] != true {
+		t.Fatalf("read_only = %#v, want true", command["read_only"])
 	}
 }
 
@@ -196,6 +237,30 @@ func TestEffectiveRepoDirUsesActiveRepoWhenCodexOmitsWorkdir(t *testing.T) {
 	}
 	if got := effectiveRepoDirWithStatus(event, "C:/repo-b", resolveStatus); got != "C:/repo-b" {
 		t.Fatalf("effective repo dir = %q, want active repo fallback", got)
+	}
+}
+
+func TestEffectiveRepoDirHonorsGitCOverCodexWorkdir(t *testing.T) {
+	data := []byte(`{
+		"session_id":"codex-multi-repo-session",
+		"cwd":"C:/repo-a",
+		"hook_event_name":"PreToolUse",
+		"tool_name":"exec_command",
+		"tool_input":{
+			"cmd":"git -C C:/repo-b add -- spec/tasks.md",
+			"workdir":"C:/repo-a"
+		}
+	}`)
+
+	event, _, err := DetectAndParse(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolveStatus := func(path string) (*RepoStatus, error) {
+		return &RepoStatus{InGit: true, Root: NormalizePath(path)}, nil
+	}
+	if got := effectiveRepoDirWithStatus(event, "C:/repo-a", resolveStatus); got != "C:/repo-b" {
+		t.Fatalf("effective repo dir = %q, want git -C target", got)
 	}
 }
 
@@ -321,6 +386,27 @@ func TestFormatClaudeDeny(t *testing.T) {
 	}
 	if hook["permissionDecisionReason"] != "blocked" {
 		t.Errorf("expected blocked, got %v", hook["permissionDecisionReason"])
+	}
+}
+
+func TestFormatClaudeAllowIncludesUpdatedInput(t *testing.T) {
+	updatedInput := map[string]any{
+		"message":    "WARD-DELEGATION/1\nward accept-delegation token",
+		"task_name":  "review",
+		"fork_turns": "none",
+	}
+	result := &Result{Action: "allow", UpdatedInput: updatedInput}
+	resp := FormatResponse(AgentClaude, "pre_tool", result)
+
+	hook, ok := resp["hookSpecificOutput"].(map[string]any)
+	if !ok {
+		t.Fatal("expected hookSpecificOutput")
+	}
+	if hook["permissionDecision"] != "allow" {
+		t.Fatalf("permission decision = %#v, want allow", hook["permissionDecision"])
+	}
+	if !reflect.DeepEqual(hook["updatedInput"], updatedInput) {
+		t.Fatalf("updated input = %#v, want %#v", hook["updatedInput"], updatedInput)
 	}
 }
 

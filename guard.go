@@ -299,6 +299,9 @@ type State struct {
 	ActorKey           string                  `json:"actor_key"`
 	AgentType          string                  `json:"agent_type,omitempty"`
 	Phase              string                  `json:"phase"`
+	DelegatedByActor   string                  `json:"delegated_by_actor,omitempty"`
+	DelegationGrantID  string                  `json:"delegation_grant_id,omitempty"`
+	DelegatedAt        *time.Time              `json:"delegated_at,omitempty"`
 	PhaseStack         []string                `json:"phase_stack,omitempty"`
 	History            []string                `json:"history"`
 	Signals            map[string]Signal       `json:"signals"`
@@ -513,9 +516,16 @@ func (s *State) ToMap() map[string]any {
 	adoptedPaths := stringListToAny(s.AdoptedPaths)
 	discardablePaths := stringListToAny(s.DiscardablePaths)
 	sessionOwnedPaths := stringListToAny(pathDifference(s.TouchedFiles, s.BaselineDirtyPaths))
+	delegatedAt := ""
+	if s.DelegatedAt != nil {
+		delegatedAt = s.DelegatedAt.Format(time.RFC3339)
+	}
 
 	return map[string]any{
 		"phase":                      s.Phase,
+		"delegated_by_actor":         s.DelegatedByActor,
+		"delegation_grant_id":        s.DelegationGrantID,
+		"delegated_at":               delegatedAt,
 		"history":                    history,
 		"tool_count":                 int64(len(s.History)),
 		"started_at":                 s.StartedAt.Format(time.RFC3339),
@@ -1157,8 +1167,9 @@ func isPathField(name string) bool {
 // Evaluation — deny-is-veto semantics.
 
 type Result struct {
-	Action  string
-	Message string
+	Action       string
+	Message      string
+	UpdatedInput map[string]any
 }
 
 var factsRefRe = regexp.MustCompile(`facts\.(\w+)`)
@@ -1178,6 +1189,13 @@ func Evaluate(guard *Guard, state *State, event ToolEvent) (*Result, map[string]
 // EvaluateVerbose is like Evaluate but writes debug info to verbose when non-nil.
 // Returns the result, the set of signal names referenced by matched rules, and any error.
 func EvaluateVerbose(guard *Guard, state *State, event ToolEvent, repoStatus *RepoStatus, verbose io.Writer) (*Result, map[string]bool, error) {
+	if isHostChildPhaseSet(state, event) {
+		return &Result{
+			Action:  "deny",
+			Message: "ward: a host-identified child cannot select its own phase; redeem a parent-issued delegation capability",
+		}, map[string]bool{}, nil
+	}
+
 	// Ward's runtime control plane must remain reachable from every phase.
 	// Otherwise a phase rule that denies its shell transport can trap the actor
 	// in that phase and also deny the signal/ownership commands needed to obey
@@ -1508,24 +1526,27 @@ func canonicalToolName(tool string) string {
 		return "Bash"
 	case "apply_patch":
 		return "Edit"
+	case "collaborationspawn_agent":
+		return "spawn_agent"
 	default:
 		return tool
 	}
 }
 
 var wardControlPlaneCommands = map[string]bool{
-	"set":         true,
-	"status":      true,
-	"enter":       true,
-	"leave":       true,
-	"allow":       true,
-	"adopt":       true,
-	"discard":     true,
-	"revoke":      true,
-	"validate":    true,
-	"end-session": true,
-	"start-actor": true,
-	"end-actor":   true,
+	"set":               true,
+	"status":            true,
+	"enter":             true,
+	"leave":             true,
+	"allow":             true,
+	"adopt":             true,
+	"discard":           true,
+	"revoke":            true,
+	"validate":          true,
+	"end-session":       true,
+	"start-actor":       true,
+	"end-actor":         true,
+	"accept-delegation": true,
 }
 
 func isWardControlPlaneCommand(input map[string]any) bool {

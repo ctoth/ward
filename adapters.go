@@ -32,6 +32,7 @@ type ToolEvent struct {
 	SessionID  string
 	AgentID    string // stable actor identity supplied by the host
 	AgentType  string // role metadata; never part of the storage key
+	TurnID     string // Codex turn identity; present on native Codex hook events
 	EventType  string // "pre_tool", "post_tool"
 	ToolUseID  string // correlates pre/post events for one tool invocation
 	ToolFailed bool   // true for an explicit post-tool failure event
@@ -63,7 +64,7 @@ func DetectAndParse(data []byte) (ToolEvent, AgentType, error) {
 			return event, agent, err
 		}
 		if event.Tool != "" {
-			enrichBashCommands(&event)
+			enrichShellCommands(&event)
 			return event, agent, nil
 		}
 	}
@@ -71,12 +72,13 @@ func DetectAndParse(data []byte) (ToolEvent, AgentType, error) {
 	return ToolEvent{}, 0, fmt.Errorf("cannot detect agent from JSON (no recognized hook_event_name)")
 }
 
-// enrichBashCommands adds parsed shell commands to Bash tool events.
+// enrichShellCommands adds parsed shell commands to supported shell tool events.
 // input.commands is a list of maps with "name" and "full" keys; the typed
 // []ParsedCommand is kept on the event for evaluation-side logic (effective
 // repo dir) that should not round-trip through the CEL map encoding.
-func enrichBashCommands(event *ToolEvent) {
-	if canonicalToolName(event.Tool) != "Bash" {
+func enrichShellCommands(event *ToolEvent) {
+	toolName := canonicalToolName(event.Tool)
+	if toolName != "Bash" && toolName != "PowerShell" {
 		return
 	}
 	if _, exists := event.Input["command"]; !exists {
@@ -125,11 +127,11 @@ func effectiveRepoDirWithStatus(event ToolEvent, activeRepo string, repoStatus f
 		if cmd.Name != "git" {
 			continue
 		}
-		if strField(event.Input, "workdir") != "" {
-			return event.CWD
-		}
 		if cmd.Dir != "" {
 			return resolveShellPath(event.CWD, cmd.Dir)
+		}
+		if strField(event.Input, "workdir") != "" {
+			return event.CWD
 		}
 		for _, path := range cmd.GitPaths {
 			if !isAbsShellPath(path) {
@@ -221,6 +223,7 @@ func parseClaude(raw map[string]any, eventName string) (ToolEvent, AgentType, er
 		SessionID:  strField(raw, "session_id"),
 		AgentID:    strField(raw, "agent_id"),
 		AgentType:  strField(raw, "agent_type"),
+		TurnID:     strField(raw, "turn_id"),
 		ToolUseID:  strField(raw, "tool_use_id"),
 		ToolFailed: eventName == "PostToolUseFailure",
 		CWD:        strField(raw, "cwd"),
@@ -320,12 +323,14 @@ func formatClaude(r *Result) map[string]any {
 			},
 		}
 	case "allow":
-		return map[string]any{
-			"hookSpecificOutput": map[string]any{
-				"hookEventName":      "PreToolUse",
-				"permissionDecision": "allow",
-			},
+		hookOutput := map[string]any{
+			"hookEventName":      "PreToolUse",
+			"permissionDecision": "allow",
 		}
+		if r.UpdatedInput != nil {
+			hookOutput["updatedInput"] = r.UpdatedInput
+		}
+		return map[string]any{"hookSpecificOutput": hookOutput}
 	default:
 		return nil
 	}

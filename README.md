@@ -162,7 +162,8 @@ All paths are normalized to forward slashes internally, including on Windows.
 
 Phase rules cannot deny a single, exact invocation of Ward's runtime control
 plane: `set`, `status`, `enter`, `leave`, `allow`, `adopt`, `discard`, `revoke`,
-`validate`, `start-actor`, `end-actor`, or `end-session` (and `ward --help`).
+`validate`, `start-actor`, `end-actor`, `end-session`, or `accept-delegation`
+(and `ward --help`).
 This prevents a restricted phase from blocking the command needed to leave that
 phase or satisfy its own signal and ownership rules.
 
@@ -213,6 +214,37 @@ Ward auto-detects the hook protocol from the JSON format:
 - **Gemini CLI**: `hook_event_name` is `BeforeTool`/`AfterTool`
 
 Each protocol gets responses in its native format.
+
+### Parent-authorized native Codex delegation
+
+A native Codex parent can request a child phase in the first line of a
+`spawn_agent.message`:
+
+```text
+WARD-DELEGATE/1 phase=researcher
+Inspect the parser and report evidence.
+```
+
+Ward exposes the requested phase to CEL as
+`input.ward_delegation_phase`. If the spawn passes the effective rules, Ward
+creates a five-minute, one-use capability and uses Codex `updatedInput` to
+replace the request header with an exact first action:
+
+```text
+ward accept-delegation <token>
+```
+
+The child's PreToolUse event supplies its opaque host actor ID. Ward consumes
+the capability under that identity and sets the phase stored in the grant; the
+child never chooses its own phase. Bearer tokens are not persisted in state,
+cannot cross session families, and cannot be replayed. Concurrent spawns use
+independent grants and do not change the session's active CLI actor binding.
+
+This is parent-authorized Ward authority, not a host-attested parent/child
+edge: Codex does not expose the originating spawn call on `SubagentStart`.
+Possession of an unexpired, unused token is therefore authority to redeem it.
+Use `fork_turns: "none"` and keep the rewritten task private to the intended
+child.
 
 For interactive commands such as `ward adopt`, an explicit `--session` or
 `WARD_SESSION` takes priority. Under Codex, Ward automatically uses
